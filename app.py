@@ -20,21 +20,29 @@ st.set_page_config(page_title="Exam Center Budget Dashboard", layout="wide")
 # ----------------------------------------------------------------------
 # DATA LOAD
 # ----------------------------------------------------------------------
-COLUMN_MAP = {
-    "UID": "UID",
-    "Center Code": "Center_Name",          # column B (full location name)
-    "Project Code": "Project_Code",
-    "Month": "Month",
-    "Budget Head": "Budget_Head",
-    "Budget": "Budget",
-    "Expence": "Expense",
-    "Approved Expence": "Approved_Expense",
-    "Budget Vs Expence": "Budget_vs_Expense",
-    "Budget Vs Approved Expence": "Budget_vs_Approved",
-    "Not Releted Budget": "Not_Related_Budget",
-    "Final Budget": "Final_Budget",
-    "State": "State",
-    "Revenue": "Revenue",
+# Normalized (lowercase, spaces/underscores stripped) header -> standard name.
+# Handles minor spelling/spacing differences between what we expect and what
+# the live sheet actually has (e.g. "Expence" vs "Expense", extra spaces).
+HEADER_ALIASES = {
+    "uid": "UID",
+    "centercode": "Center_Name",          # first "Center Code" column (full name)
+    "projectcode": "Project_Code",
+    "month": "Month",
+    "budgethead": "Budget_Head",
+    "budget": "Budget",
+    "expence": "Expense",
+    "expense": "Expense",
+    "approvedexpence": "Approved_Expense",
+    "approvedexpense": "Approved_Expense",
+    "budgetvsexpence": "Budget_vs_Expense",
+    "budgetvsexpense": "Budget_vs_Expense",
+    "budgetvsapprovedexpence": "Budget_vs_Approved",
+    "budgetvsapprovedexpense": "Budget_vs_Approved",
+    "notreletedbudget": "Not_Related_Budget",
+    "notrelatedbudget": "Not_Related_Budget",
+    "finalbudget": "Final_Budget",
+    "state": "State",
+    "revenue": "Revenue",
 }
 
 NUMERIC_COLS = [
@@ -42,39 +50,68 @@ NUMERIC_COLS = [
     "Budget_vs_Approved", "Not_Related_Budget", "Final_Budget", "Revenue",
 ]
 
+REQUIRED_COLS = ["Budget_Head", "Budget", "Expense"]
+
+
+def _normalize(name: str) -> str:
+    return "".join(str(name).lower().split()).replace("_", "")
+
 
 @st.cache_data(ttl=300)
-def load_data() -> pd.DataFrame:
-    df = pd.read_csv(CSV_URL)
+def load_data():
+    raw = pd.read_csv(CSV_URL)
+    raw.columns = [str(c).strip() for c in raw.columns]
 
-    # Column N is a second "Center Code" (short code like CB1011) — pandas
-    # will auto-suffix duplicate header names as "Center Code.1"
-    rename = dict(COLUMN_MAP)
-    if "Center Code.1" in df.columns:
-        rename["Center Code.1"] = "Center_Code"
-    df = df.rename(columns=rename)
+    new_cols = []
+    seen_center_code_name = False
+    for col in raw.columns:
+        norm = _normalize(col)
+        if norm == "centercode":
+            # first occurrence = full location name, second = short code
+            if not seen_center_code_name:
+                new_cols.append("Center_Name")
+                seen_center_code_name = True
+            else:
+                new_cols.append("Center_Code")
+        else:
+            new_cols.append(HEADER_ALIASES.get(norm, col))
+    raw.columns = new_cols
 
-    if "Center_Code" not in df.columns:
-        # fallback: derive from UID e.g. "CB1011 Dec_25" -> "CB1011"
-        df["Center_Code"] = df["UID"].astype(str).str.split().str[0]
+    if "Center_Code" not in raw.columns and "UID" in raw.columns:
+        raw["Center_Code"] = raw["UID"].astype(str).str.split().str[0]
 
     for col in NUMERIC_COLS:
-        if col in df.columns:
-            df[col] = (
-                df[col].astype(str).str.replace(",", "", regex=False).str.strip()
-            )
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        if col in raw.columns:
+            raw[col] = raw[col].astype(str).str.replace(",", "", regex=False).str.strip()
+            raw[col] = pd.to_numeric(raw[col], errors="coerce").fillna(0)
 
-    df = df.dropna(how="all")
-    df = df[df["Budget_Head"].notna()] if "Budget_Head" in df.columns else df
-    return df
+    raw = raw.dropna(how="all")
+    return raw
 
 
-df = load_data()
+try:
+    df = load_data()
+except Exception as e:
+    st.error(f"Google Sheet se data load karne mein dikkat aayi: {e}")
+    st.stop()
+
+missing = [c for c in REQUIRED_COLS if c not in df.columns]
+if missing:
+    st.error(
+        "Ye zaroori column(s) sheet mein nahi mil rahe: "
+        f"{', '.join(missing)}.\n\n"
+        "Sheet ke actual column headers neeche dikh rahe hain — inhe check "
+        "karke app.py ke HEADER_ALIASES dictionary mein sahi naam add karo."
+    )
+    st.write("Sheet mein mile columns:", list(df.columns))
+    st.stop()
+
+if "Budget_Head" in df.columns:
+    df = df[df["Budget_Head"].notna()]
 
 if df.empty:
     st.error(
-        "Data load nahi ho paya. Sheet sharing check karo — "
+        "Data load nahi ho paya (0 rows). Sheet sharing check karo — "
         "'Anyone with the link - Viewer' set hona chahiye."
     )
     st.stop()
@@ -136,18 +173,19 @@ col_left, col_right = st.columns(2)
 
 with col_left:
     st.subheader("Center-wise Budget vs Expense")
+    center_col = "Center_Name" if "Center_Name" in filtered.columns else "Center_Code"
     center_grp = (
-        filtered.groupby("Center_Name")[["Budget", "Expense"]]
+        filtered.groupby(center_col)[["Budget", "Expense"]]
         .sum()
         .sort_values("Budget", ascending=False)
         .reset_index()
     )
     fig1 = px.bar(
         center_grp,
-        x="Center_Name",
+        x=center_col,
         y=["Budget", "Expense"],
         barmode="group",
-        labels={"value": "Amount (₹)", "Center_Name": "Center", "variable": ""},
+        labels={"value": "Amount (₹)", center_col: "Center", "variable": ""},
     )
     fig1.update_layout(xaxis_tickangle=-30, legend_title_text="")
     st.plotly_chart(fig1, use_container_width=True)
