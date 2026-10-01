@@ -1195,6 +1195,21 @@ renderOverviewTab();
 
 st.set_page_config(page_title="Exam Center Budget Dashboard", layout="wide")
 
+# Remove Streamlit's default top padding/margin so the embedded dashboard
+# starts right at the top of the page, with no leftover white space above it.
+st.markdown(
+    """
+    <style>
+        .block-container { padding-top: 0rem; padding-bottom: 0rem; }
+        div[data-testid="stToolbar"] { visibility: hidden; height: 0%; }
+        div[data-testid="stDecoration"] { visibility: hidden; height: 0%; }
+        header[data-testid="stHeader"] { height: 0rem; }
+        iframe { display: block; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 HEADER_ALIASES = {
     "uid": "UID",
     "centercode": "Center_Name",
