@@ -1329,7 +1329,23 @@ for i, r in df.iterrows():
     expense = float(r.get("Expense", 0) or 0)
     variance = budget - expense
     util_pct = (expense / budget * 100) if budget else 0
-    all_cols = {h: (None if pd.isna(v) else v) for h, v in raw_df.iloc[i].items()}
+    def _json_safe(v):
+        # pandas/numpy values (numpy.int64, numpy.float64, numpy.bool_, etc.)
+        # are NOT natively JSON-serializable -> convert to plain Python
+        # types first, otherwise json.dumps() crashes on the live sheet data.
+        try:
+            if pd.isna(v):
+                return None
+        except (TypeError, ValueError):
+            pass
+        if hasattr(v, "item"):
+            try:
+                return v.item()
+            except Exception:
+                return str(v)
+        return v
+
+    all_cols = {h: _json_safe(v) for h, v in raw_df.iloc[i].items()}
     rows.append({
         "uid": str(r.get("UID", "")),
         "centerName": str(r.get(center_col, "")),
@@ -1403,7 +1419,7 @@ st.info(
 # on GitHub / Streamlit Cloud -- no separate assets/ folder needed)
 # ----------------------------------------------------------------------
 html = DASHBOARD_TEMPLATE_HTML
-html = html.replace("__ROWS_JSON__", json.dumps(rows))
+html = html.replace("__ROWS_JSON__", json.dumps(rows, default=str))
 html = html.replace("__MONTH_ORDER_JSON__", json.dumps(months))
 html = html.replace("__ALL_HEADERS_JSON__", json.dumps(orig_headers))
 html = html.replace("__DEFAULT_COLUMNS_JSON__", json.dumps(DEFAULT_COLUMNS))
