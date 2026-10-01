@@ -1370,51 +1370,9 @@ for i, r in df.iterrows():
 DEFAULT_COLUMNS = [c for c in orig_headers if c][:10]
 
 # ----------------------------------------------------------------------
-# Quick text-level insights shown above the interactive dashboard
-# ----------------------------------------------------------------------
-total_budget = df["Budget"].sum()
-total_expense = df["Expense"].sum()
-total_variance = total_budget - total_expense
-over_budget_count = int((df["Expense"] > df["Budget"]).sum())
-utilization = (total_expense / total_budget * 100) if total_budget else 0
-
-head_grp = df.groupby("Budget_Head")[["Budget", "Expense"]].sum()
-head_grp["Variance"] = head_grp["Budget"] - head_grp["Expense"]
-worst_head = head_grp["Variance"].idxmin() if not head_grp.empty else "-"
-best_head = head_grp["Variance"].idxmax() if not head_grp.empty else "-"
-
-center_grp = df.groupby(center_col)[["Budget", "Expense"]].sum()
-center_grp["Variance"] = center_grp["Budget"] - center_grp["Expense"]
-worst_center = center_grp["Variance"].idxmin() if not center_grp.empty else "-"
-best_center = center_grp["Variance"].idxmax() if not center_grp.empty else "-"
-
-state_grp = (
-    df.groupby("State")[["Budget", "Expense"]].sum() if "State" in df.columns else pd.DataFrame()
-)
-
-st.title("📊 Exam Center — Budget vs Expense Dashboard")
-
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Total Budget", f"₹{total_budget:,.0f}")
-c2.metric("Total Expense", f"₹{total_expense:,.0f}")
-c3.metric("Net Variance", f"₹{total_variance:,.0f}")
-c4.metric("Utilization", f"{utilization:.0f}%")
-c5.metric("Over-Budget Items", f"{over_budget_count} / {len(df)}")
-
-st.info(
-    f"**Sabse zyada over-budget Budget Head:** {worst_head}  |  "
-    f"**Sabse zyada saving wala Budget Head:** {best_head}\n\n"
-    f"**Sabse zyada over-budget Center:** {worst_center}  |  "
-    f"**Sabse zyada saving wala Center:** {best_center}"
-    + (
-        f"\n\n**States covered:** {', '.join(state_grp.index.astype(str))}"
-        if not state_grp.empty
-        else ""
-    )
-)
-
-# ----------------------------------------------------------------------
 # Render the interactive Chart.js dashboard
+# (the dashboard below already shows its own KPIs/insights on the
+# Overview tab, so no separate Streamlit-rendered summary is shown here)
 # (template is embedded directly below so the app works as a SINGLE file
 # on GitHub / Streamlit Cloud -- no separate assets/ folder needed)
 # ----------------------------------------------------------------------
