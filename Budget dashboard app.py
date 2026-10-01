@@ -1197,13 +1197,23 @@ st.set_page_config(page_title="Exam Center Budget Dashboard", layout="wide")
 
 # Remove Streamlit's default top padding/margin so the embedded dashboard
 # starts right at the top of the page, with no leftover white space above it.
+# Using display:none (not visibility/height tricks) fully removes these
+# elements from the layout instead of leaving an invisible element that can
+# still overlap and clip the content below it.
 st.markdown(
     """
     <style>
-        .block-container { padding-top: 0rem; padding-bottom: 0rem; }
-        div[data-testid="stToolbar"] { visibility: hidden; height: 0%; }
-        div[data-testid="stDecoration"] { visibility: hidden; height: 0%; }
-        header[data-testid="stHeader"] { height: 0rem; }
+        header[data-testid="stHeader"] { display: none !important; }
+        div[data-testid="stToolbar"] { display: none !important; }
+        div[data-testid="stDecoration"] { display: none !important; }
+        div[data-testid="stStatusWidget"] { display: none !important; }
+        .block-container {
+            padding-top: 0rem !important;
+            padding-bottom: 0rem !important;
+            margin-top: 0rem !important;
+        }
+        div[data-testid="stAppViewContainer"] { padding-top: 0rem !important; }
+        div[data-testid="stMainBlockContainer"] { padding-top: 0rem !important; }
         iframe { display: block; }
     </style>
     """,
