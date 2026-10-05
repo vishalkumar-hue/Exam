@@ -123,7 +123,7 @@ DASHBOARD_TEMPLATE_HTML = r"""
 <div class="wrap">
   <div class="topbar">
     <div>
-      <h1>Exam<span>.</span>Budget</h1>
+      <h1>APK<span>&amp;</span>Infra</h1>
       <div class="sub"><span class="live-dot"></span>Exam Center Ops · Budget, Expense, Approvals &amp; Revenue (Live)</div>
     </div>
     <div class="topbar-right">
