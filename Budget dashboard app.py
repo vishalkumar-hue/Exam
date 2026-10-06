@@ -1,25 +1,27 @@
 """
 APK Project Budget vs Actual Expenses Dashboard
-Data source: Google Sheet "APK" tab  (or upload a CSV / TSV / XLSX export of the same sheet)
+Data source: Google Sheet "APK" tab (loaded live, no file upload needed)
 
 Expected columns (typos in the sheet are fine, they are mapped automatically):
   Project Code | Expences Head | Budget Head | Budget | Actual Expences | Margine | Margine %
 
-Setup: set GID below to the number after "gid=" in the APK tab URL
-(and change SHEET_ID if the APK tab is in a different workbook).
-The sheet must be shared as "Anyone with the link - Viewer".
+Setup: the sheet must be shared as "Anyone with the link - Viewer".
+The tab is read by NAME (SHEET_NAME below), so no GID is needed.
+Optional: if you ever want to read by gid instead, paste it in GID.
 """
 
 import json
 import re
 from datetime import datetime
+from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
 SHEET_ID = "1P8awjtc-dwxCce1WJLDixljqL37yqCxnOe5QZ75_gIw"  # change if the APK tab is in another workbook
-GID = ""  # <-- paste the APK tab gid here. If empty, the app asks you to upload a file instead.
+SHEET_NAME = "APK"  # exact name of the tab in the Google Sheet
+GID = ""  # optional. Leave empty to read the tab by SHEET_NAME
 
 # Friendly project names, keyed by the 2nd part of the project code (add new ones here)
 PROJECT_NAMES = {
@@ -955,41 +957,29 @@ def prepare(raw):
 
 
 @st.cache_data(ttl=300)
-def load_sheet(sheet_id, gid):
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
-    return pd.read_csv(url)
-
-
-def read_upload(f):
-    name = f.name.lower()
-    if name.endswith((".xlsx", ".xls")):
-        return pd.read_excel(f)
-    if name.endswith((".tsv", ".txt")):
-        return pd.read_csv(f, sep="\t")
-    return pd.read_csv(f, sep=None, engine="python")
+def load_sheet(sheet_id, sheet_name, gid):
+    """Load the APK tab live from Google Sheets.
+    - If GID is given: export by gid.
+    - Otherwise: read the tab by its NAME (no gid needed)."""
+    if str(gid).strip():
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={str(gid).strip()}"
+    else:
+        url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq"
+               f"?tqx=out:csv&sheet={quote(sheet_name)}&headers=1")
+    return pd.read_csv(url, dtype=str)
 
 
 # ----------------------------------------------------------------------
-# Load data
+# Load data (always from Google Sheet - no upload)
 # ----------------------------------------------------------------------
-raw_df = None
-if str(GID).strip():
-    try:
-        raw_df = load_sheet(SHEET_ID, str(GID).strip())
-    except Exception as e:
-        st.error(f"Could not load data from the Google Sheet: {e}")
-        st.stop()
-else:
-    up = st.file_uploader("Upload the APK sheet (CSV / TSV / XLSX) - or set GID in the code to read it live from Google Sheets",
-                          type=["csv", "tsv", "txt", "xlsx", "xls"])
-    if up is None:
-        st.info("Set GID at the top of this file to load the APK tab live, or upload an export of the sheet here.")
-        st.stop()
-    try:
-        raw_df = read_upload(up)
-    except Exception as e:
-        st.error(f"Could not read the uploaded file: {e}")
-        st.stop()
+try:
+    raw_df = load_sheet(SHEET_ID, SHEET_NAME, GID)
+except Exception as e:
+    st.error(
+        f"Could not load the '{SHEET_NAME}' tab from the Google Sheet: {e}\n\n"
+        "Check: (1) the tab name is exactly APK, (2) sharing is 'Anyone with the link - Viewer'."
+    )
+    st.stop()
 
 rows, info = prepare(raw_df)
 if rows is None:
