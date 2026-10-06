@@ -128,6 +128,10 @@ DASHBOARD_TEMPLATE_HTML = r"""
   tr.hm-selected td.hm-name{color:var(--gold); font-weight:700; box-shadow:inset 3px 0 0 var(--gold);}
   tr.hm-selected td.hm-name::after{content:' ▾'; color:var(--gold);}
   tr.hm-detail td{background:var(--panel-2) !important; padding:12px 14px; white-space:normal; border-bottom:2px solid var(--gold);}
+  .hm-mbtns{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;}
+  .hm-mbtn{background:transparent; border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:4px 11px; font-size:11.5px; cursor:pointer; font-family:inherit;}
+  .hm-mbtn:hover{color:var(--gold); border-color:var(--gold);}
+  .hm-mbtn.active{background:rgba(217,164,65,0.15); color:var(--gold); border-color:var(--gold); font-weight:700;}
   .hm-chips{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px;}
   .hm-chips:last-child{margin-bottom:0;}
   .hm-chip{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:7px 11px; min-width:118px;}
@@ -692,7 +696,7 @@ function renderMonthly(){
 
 // ---------------- CENTERS ----------------
 let centerSearchTerm = '', topNCenterTab = 15;
-let openCenters = new Set();   // heatmap me jin centers pe click kiya hai
+let openCenters = new Map();   // heatmap me jin centers pe click kiya hai
 function renderCenters(){
   const rows = getFilteredRows();
   const all = agg(rows, by('centerName')).sort(sortBudget);
@@ -736,20 +740,26 @@ function renderHeat(rows, all){
       return `<td class="hc" style="background:${bg(u)}" title="${fmtRs(g.e)} of ${fmtRs(g.b)}">${fmtPct(u)}</td>`;
     }).join('');
     return `<tr class="hm-row${openCenters.has(c.key) ? ' hm-selected' : ''}" data-center="${esc(c.key)}"><td class="hm-name" title="Click karo - is center ki poori detail neeche khulegi">${esc(c.key)}</td>${cells}<td class="hc" style="background:${bg(c.UtilPct)};font-weight:700">${fmtPct(c.UtilPct)}</td></tr>`
-      + (openCenters.has(c.key) ? `<tr class="hm-detail"><td colspan="${months.length + 2}">${centerDetailHtml(c.key)}</td></tr>` : '');
+      + (openCenters.has(c.key) ? `<tr class="hm-detail" data-center="${esc(c.key)}"><td colspan="${months.length + 2}">${centerDetailHtml(c.key, openCenters.get(c.key))}</td></tr>` : '');
   }).join(''));
 }
 
-// ---- v3: heatmap me center pe click -> usi row ke neeche rent / bill wagairah ----
-function centerDetailHtml(name){
-  const rows = getFilteredRows().filter(r => r.centerName === name);
-  if (!rows.length) return '<span class="muted">Current filters me is center ka data nahi hai.</span>';
+// ---- v3: heatmap me center pe click -> usi row ke neeche rent / bill wagairah (All ya koi ek month) ----
+function centerDetailHtml(name, month){
+  month = month || 'All';
+  const all = getFilteredRows().filter(r => r.centerName === name);
+  if (!all.length) return '<span class="muted">Current filters me is center ka data nahi hai.</span>';
+  const mlist = [...new Set(all.map(r => r.month))].sort((a,b) => ord(a) - ord(b));
+  if (month !== 'All' && !mlist.includes(month)) month = 'All';
+  const rows = month === 'All' ? all : all.filter(r => r.month === month);
   const heads = agg(rows, by('budgetHead')).sort((a,b) => b.Expense - a.Expense);
   const part = list => { const x = rows.filter(r => list.includes(r.budgetHead)); return [sum(x, E), sum(x, B)]; };
   const [rentE, rentB] = part(RENT_HEADS), [billE, billB] = part(BILL_HEADS);
   const chip = (label, e, b, cls) => `<div class="hm-chip ${cls || ''}"><div class="hm-chip-l">${esc(label)}</div><div class="hm-chip-v">${fmtCr(e)}</div><div class="hm-chip-s">Budget ${fmtCr(b)}</div></div>`;
-  return '<div class="hm-chips">'
-    + chip('Total Expense', sum(rows, E), sum(rows, B), 'tot')
+  const btns = '<div class="hm-mbtns">' + ['All', ...mlist].map(m => `<button type="button" class="hm-mbtn${m === month ? ' active' : ''}" data-month="${esc(m)}">${esc(m)}</button>`).join('') + '</div>';
+  return btns
+    + '<div class="hm-chips">'
+    + chip('Total Expense' + (month === 'All' ? '' : ' · ' + month), sum(rows, E), sum(rows, B), 'tot')
     + chip('Rent', rentE, rentB, 'key')
     + chip('Bills (Elec + DG + Water + Internet)', billE, billB, 'key')
     + '</div><div class="hm-chips">'
@@ -757,15 +767,23 @@ function centerDetailHtml(name){
     + '</div>';
 }
 $('heatTable').addEventListener('click', e => {
+  const mb = e.target.closest('button.hm-mbtn');
+  if (mb){
+    const dtr = mb.closest('tr.hm-detail'); if (!dtr) return;
+    const name = dtr.dataset.center;
+    openCenters.set(name, mb.dataset.month);
+    dtr.firstElementChild.innerHTML = centerDetailHtml(name, mb.dataset.month);
+    return;
+  }
   const tr = e.target.closest('tr.hm-row'); if (!tr) return;
   const name = tr.dataset.center, nxt = tr.nextElementSibling;
   if (openCenters.has(name)){
     openCenters.delete(name); tr.classList.remove('hm-selected');
     if (nxt && nxt.classList.contains('hm-detail')) nxt.remove();
   } else {
-    openCenters.add(name); tr.classList.add('hm-selected');
-    const d = document.createElement('tr'); d.className = 'hm-detail';
-    const td = document.createElement('td'); td.colSpan = tr.children.length; td.innerHTML = centerDetailHtml(name);
+    openCenters.set(name, 'All'); tr.classList.add('hm-selected');
+    const d = document.createElement('tr'); d.className = 'hm-detail'; d.dataset.center = name;
+    const td = document.createElement('td'); td.colSpan = tr.children.length; td.innerHTML = centerDetailHtml(name, 'All');
     d.appendChild(td); tr.after(d);
   }
 });
