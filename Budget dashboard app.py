@@ -1,13 +1,14 @@
 """
-APK Project Budget vs Actual Expenses Dashboard
-Data source: Google Sheet "APK" tab (loaded live, no file upload needed)
+APK & Infra - Combined Budget Dashboards (single Streamlit app)
 
-Expected columns (typos in the sheet are fine, they are mapped automatically):
-  Project Code | Expences Head | Budget Head | Budget | Actual Expences | Margine | Margine %
+  1) APK Project Budget      -> Google Sheet tab "APK"   (read by tab NAME)
+  2) Exam Center Budget (v3) -> Google Sheet tab "Exam"  (read by GID)
 
-Setup: the sheet must be shared as "Anyone with the link - Viewer".
-The tab is read by NAME (SHEET_NAME below), so no GID is needed.
-Optional: if you ever want to read by gid instead, paste it in GID.
+Folder structure (2 files, same folder):
+    app.py                 <- this file (APK HTML template is embedded below)
+    exam_dashboard.html    <- Exam Center v3 HTML template
+
+Sheet must be shared as "Anyone with the link - Viewer".
 """
 
 import json
@@ -20,17 +21,21 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-SHEET_ID = "1P8awjtc-dwxCce1WJLDixljqL37yqCxnOe5QZ75_gIw"  # change if the APK tab is in another workbook
-SHEET_NAME = "APK"  # exact name of the tab in the Google Sheet
-GID = ""  # optional. Leave empty to read the tab by SHEET_NAME
+# ======================================================================
+# SETTINGS
+# ======================================================================
+SHEET_ID = "1P8awjtc-dwxCce1WJLDixljqL37yqCxnOe5QZ75_gIw"
 
-# ---- Exam Center dashboard (old dashboard) - data source ----
-# Apne purane Exam Center data wali sheet/tab ki details yahan daalo
-EXAM_SHEET_ID = SHEET_ID          # agar alag workbook hai to uski ID yahan daalo
-EXAM_SHEET_NAME = "Exam Center"   # <-- us tab ka exact naam
-EXAM_GID = ""                     # optional (naam ki jagah gid)
+# ---- APK tab ----
+APK_SHEET_NAME = "APK"   # exact tab name
+APK_GID = ""             # optional: if filled, gid is used instead of the name
 
-# Friendly project names, keyed by the 2nd part of the project code (add new ones here)
+# ---- Exam tab ----
+EXAM_GID = "1873962246"  # Exam tab gid
+
+EXAM_TEMPLATE_FILE = "exam_dashboard.html"
+
+# Friendly project names for APK (key = 2nd part of the project code)
 PROJECT_NAMES = {
     "RAIPUR-LAND": "Raipur Land",
     "APK-EXP-JAIPR": "Jaipur",
@@ -41,9 +46,10 @@ PROJECT_NAMES = {
     "APK-NAYARAIPUR": "Naya Raipur",
     "APK-KANPUR": "Kanpur",
 }
-LARGE_OVERSPEND_PCT = 300  # lines spent at/above this % of budget are flagged "verify"
+LARGE_OVERSPEND_PCT = 300  # APK: lines spent at/above this % of budget are flagged "verify"
 
-DASHBOARD_TEMPLATE_HTML = r"""
+# ---- APK dashboard HTML template (embedded) ----
+APK_TEMPLATE_HTML = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -810,7 +816,7 @@ renderOverview();
 </html>
 """
 
-st.set_page_config(page_title="APK Project Budget Dashboard", layout="wide")
+st.set_page_config(page_title="APK & Infra Budget Dashboards", layout="wide")
 
 st.markdown(
     """
@@ -819,35 +825,30 @@ st.markdown(
         div[data-testid="stToolbar"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
         div[data-testid="stStatusWidget"] { display: none !important; }
-        .block-container { padding-top: 0rem !important; padding-bottom: 0rem !important; margin-top: 0rem !important; }
+        .block-container { padding-top: 0.5rem !important; padding-bottom: 0rem !important; margin-top: 0rem !important; }
         div[data-testid="stAppViewContainer"] { padding-top: 0rem !important; }
-        div[data-testid="stMainBlockContainer"] { padding-top: 0rem !important; }
+        div[data-testid="stMainBlockContainer"] { padding-top: 0.5rem !important; }
         iframe { display: block; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ----------------------------------------------------------------------
-# Column mapping (sheet headers have typos: "Expences", "Margine" ...)
-# ----------------------------------------------------------------------
-HEADER_ALIASES = {
-    "projectcode": "Project_Code",
-    "expenceshead": "Expense_Head", "expenseshead": "Expense_Head",
-    "expencehead": "Expense_Head", "expensehead": "Expense_Head",
-    "budgethead": "Budget_Head",
-    "budget": "Budget",
-    "actualexpences": "Actual", "actualexpenses": "Actual",
-    "actualexpence": "Actual", "actualexpense": "Actual", "actual": "Actual",
-    "margine": "Margin", "margin": "Margin",
-    "margine%": "Margin_Pct", "margin%": "Margin_Pct",
-    "remarks": "Remarks",
-}
-REQUIRED_COLS = ["Project_Code", "Budget_Head", "Budget", "Actual"]
+
+# ======================================================================
+# COMMON HELPERS
+# ======================================================================
+def dump(obj):
+    return json.dumps(obj, default=str, ensure_ascii=False).replace("</", "<\\/")
 
 
-def _norm(name):
-    return re.sub(r"[^a-z%]", "", str(name).lower())
+def read_template(filename):
+    path = Path(__file__).with_name(filename)
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception as e:
+        st.error(f"'{filename}' file nahi mili (app.py ke saath same folder me honi chahiye): {e}")
+        st.stop()
 
 
 def to_num(series):
@@ -861,7 +862,40 @@ def clean_text(v):
     return re.sub(r"\s+", " ", str(v)).strip()
 
 
-def parse_code(code):
+@st.cache_data(ttl=300)
+def load_sheet(sheet_id, sheet_name, gid):
+    """Load a tab live from Google Sheets (by gid if given, else by tab name)."""
+    if str(gid).strip():
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={str(gid).strip()}"
+    else:
+        url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq"
+               f"?tqx=out:csv&sheet={quote(sheet_name)}&headers=1")
+    return pd.read_csv(url, dtype=str)
+
+
+# ======================================================================
+# 1) APK PROJECT BUDGET
+# ======================================================================
+APK_HEADER_ALIASES = {
+    "projectcode": "Project_Code",
+    "expenceshead": "Expense_Head", "expenseshead": "Expense_Head",
+    "expencehead": "Expense_Head", "expensehead": "Expense_Head",
+    "budgethead": "Budget_Head",
+    "budget": "Budget",
+    "actualexpences": "Actual", "actualexpenses": "Actual",
+    "actualexpence": "Actual", "actualexpense": "Actual", "actual": "Actual",
+    "margine": "Margin", "margin": "Margin",
+    "margine%": "Margin_Pct", "margin%": "Margin_Pct",
+    "remarks": "Remarks",
+}
+APK_REQUIRED = ["Project_Code", "Budget_Head", "Budget", "Actual"]
+
+
+def _apk_norm(name):
+    return re.sub(r"[^a-z%]", "", str(name).lower())
+
+
+def apk_parse_code(code):
     """IIL/APK-NAYARAIPUR/240226/CENTRE-SETUP/IILC -> client, project key, date, type"""
     parts = [p.strip() for p in str(code).split("/")]
     client = parts[0] if parts else ""
@@ -876,14 +910,14 @@ def parse_code(code):
     return client, key, date, ptype
 
 
-def project_name(key):
+def apk_project_name(key):
     k = key.strip().upper()
     if k in PROJECT_NAMES:
         return PROJECT_NAMES[k]
     return re.sub(r"^APK-(EXP-)?", "", key, flags=re.I).replace("-", " ").title()
 
 
-def status_of(budget, actual):
+def apk_status(budget, actual):
     if budget <= 0:
         return "Unbudgeted" if actual > 0 else "No Budget"
     if actual <= 0:
@@ -896,20 +930,18 @@ def status_of(budget, actual):
     return "In Progress"
 
 
-def prepare(raw):
+def prepare_apk(raw):
     df = raw.copy()
-    df.columns = [HEADER_ALIASES.get(_norm(c), str(c).strip()) for c in df.columns]
-    missing = [c for c in REQUIRED_COLS if c not in df.columns]
+    df.columns = [APK_HEADER_ALIASES.get(_apk_norm(c), str(c).strip()) for c in df.columns]
+    missing = [c for c in APK_REQUIRED if c not in df.columns]
     if missing:
         return None, {"missing": missing, "found": list(df.columns)}
 
-    # drop the second "header-like" row and empty rows
     code = df["Project_Code"].astype(str).str.strip()
     keep = ~code.str.lower().isin(["project code", "", "nan", "none"])
     skipped = int((~keep).sum())
     df = df[keep].copy()
 
-    # sheet formula errors (#DIV/0!, #VALUE!) in Margin columns
     err = pd.Series(False, index=df.index)
     for col in ("Margin", "Margin_Pct"):
         if col in df.columns:
@@ -925,7 +957,7 @@ def prepare(raw):
         bud, act = float(r["Budget"]), float(r["Actual"])
         if bud == 0 and act == 0:
             continue
-        client, key, date, ptype = parse_code(r["Project_Code"])
+        client, key, date, ptype = apk_parse_code(r["Project_Code"])
         bhead = clean_text(r.get("Budget_Head", ""))
         ehead = clean_text(r.get("Expense_Head", "")) or bhead
         bhead = bhead or ehead
@@ -934,7 +966,7 @@ def prepare(raw):
             mismatch += 1
         rows.append({
             "code": clean_text(r["Project_Code"]),
-            "project": project_name(key),
+            "project": apk_project_name(key),
             "client": client,
             "type": ptype,
             "created": date.strftime("%d %b %Y") if date else "",
@@ -942,11 +974,10 @@ def prepare(raw):
             "expHead": ehead,
             "budget": bud,
             "actual": act,
-            "status": status_of(bud, act),
+            "status": apk_status(bud, act),
             "flags": [],
         })
 
-    # flags: unbudgeted, large overspend, possible duplicates across projects
     dup = {}
     for r in rows:
         if r["actual"] > 0:
@@ -963,94 +994,273 @@ def prepare(raw):
     return rows, info
 
 
-@st.cache_data(ttl=300)
-def load_sheet(sheet_id, sheet_name, gid):
-    """Load the APK tab live from Google Sheets.
-    - If GID is given: export by gid.
-    - Otherwise: read the tab by its NAME (no gid needed)."""
-    if str(gid).strip():
-        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={str(gid).strip()}"
-    else:
-        url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq"
-               f"?tqx=out:csv&sheet={quote(sheet_name)}&headers=1")
-    return pd.read_csv(url, dtype=str)
+def show_apk():
+    try:
+        raw_df = load_sheet(SHEET_ID, APK_SHEET_NAME, APK_GID)
+    except Exception as e:
+        st.error(
+            f"Could not load the '{APK_SHEET_NAME}' tab from the Google Sheet: {e}\n\n"
+            "Check: (1) the tab name is exactly APK, (2) sharing is 'Anyone with the link - Viewer'."
+        )
+        st.stop()
+
+    rows, info = prepare_apk(raw_df)
+    if rows is None:
+        st.error("These required column(s) were not found in the sheet: " + ", ".join(info["missing"]) +
+                 ". Please check the headers and add the correct names in APK_HEADER_ALIASES.")
+        st.write("Columns found in the sheet:", info["found"])
+        st.stop()
+    if not rows:
+        st.error("No data rows found after cleaning. Please check the sheet data and sharing.")
+        st.stop()
+
+    period_label = f"{len({r['project'] for r in rows})} projects · {len(rows)} line items"
+    html = APK_TEMPLATE_HTML
+    html = html.replace("__ROWS_JSON__", dump(rows))
+    html = html.replace("__INFO_JSON__", dump(info))
+    html = html.replace("__PERIOD_LABEL__", period_label)
+    components.html(html, height=2600, scrolling=True)
+    st.caption("Budget = 'Budget' column, Actual = 'Actual Expences' column. Remaining and Util % are recalculated here, so sheet errors like #DIV/0! do not affect the charts.")
 
 
-# ----------------------------------------------------------------------
-# Exam Center data preparation
-# ----------------------------------------------------------------------
-EXAM_ALIASES = {
-    "state": "state",
-    "center": "centerName", "centre": "centerName", "centername": "centerName",
-    "centrename": "centerName", "examcenter": "centerName", "examcentre": "centerName",
-    "examcentername": "centerName",
-    "centercode": "centerCode", "centrecode": "centerCode",
-    "projectcode": "projectCode",
-    "budgethead": "budgetHead",
-    "month": "month",
-    "budget": "budget",
-    "expense": "expense", "expenses": "expense", "expence": "expense", "expences": "expense",
-    "actual": "expense", "actualexpense": "expense", "actualexpenses": "expense",
-    "actualexpence": "expense", "actualexpences": "expense",
+# ======================================================================
+# 2) EXAM CENTER BUDGET (v3)
+# ======================================================================
+EXAM_HEADER_ALIASES = {
+    "uid": "UID",
+    "centercode": "Center_Name",
+    "projectcode": "Project_Code",
+    "month": "Month",
+    "budgethead": "Budget_Head",
+    "budget": "Budget",
+    "expence": "Expense",
+    "expense": "Expense",
+    "approvedexpence": "Approved_Expense",
+    "approvedexpense": "Approved_Expense",
+    "budgetvsexpence": "Budget_vs_Expense",
+    "budgetvsexpense": "Budget_vs_Expense",
+    "budgetvsapprovedexpence": "Budget_vs_Approved",
+    "budgetvsapprovedexpense": "Budget_vs_Approved",
+    "notreletedbudget": "Not_Related_Budget",
+    "notrelatedbudget": "Not_Related_Budget",
+    "finalbudget": "Final_Budget",
+    "state": "State",
+    "revenue": "Revenue",
 }
-EXAM_REQUIRED = ["centerName", "budget", "expense"]
-EXAM_DEFAULT_KEYS = {"state", "centerName", "centerCode", "projectCode", "budgetHead", "month", "budget", "expense"}
+EXAM_NUMERIC_COLS = [
+    "Budget", "Expense", "Approved_Expense", "Budget_vs_Expense",
+    "Budget_vs_Approved", "Not_Related_Budget", "Final_Budget", "Revenue",
+]
+EXAM_REQUIRED = ["Budget_Head", "Budget", "Expense"]
 
 
-def prepare_exam(raw):
-    df = raw.copy()
-    df.columns = [str(c).strip() for c in df.columns]
-    mapped = {}
-    for c in df.columns:
-        key = EXAM_ALIASES.get(_norm(c))
-        if key and key not in mapped:
-            mapped[key] = c
-    missing = [k for k in EXAM_REQUIRED if k not in mapped]
-    if missing:
-        return None, {"missing": missing, "found": list(df.columns)}
+def _exam_normalize(name):
+    s = re.sub(r"\.\d+$", "", str(name))  # pandas suffixes repeated headers with ".1"
+    return "".join(s.lower().split()).replace("_", "")
 
-    df = df.dropna(how="all")
-    bud = to_num(df[mapped["budget"]]).fillna(0)
-    exp = to_num(df[mapped["expense"]]).fillna(0)
 
-    def col(key):
-        if key in mapped:
-            return df[mapped[key]].map(clean_text)
-        return pd.Series([""] * len(df), index=df.index)
+@st.cache_data(ttl=300)
+def load_exam_data():
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={EXAM_GID}"
+    raw = pd.read_csv(url)
+    raw.columns = [str(c).strip() for c in raw.columns]
+    orig_headers = list(raw.columns)
 
-    state, center, ccode = col("state"), col("centerName"), col("centerCode")
-    pcode, bhead, month = col("projectCode"), col("budgetHead"), col("month")
+    new_cols, seen_center = [], False
+    for col in raw.columns:
+        norm = _exam_normalize(col)
+        if norm == "centercode":
+            if not seen_center:
+                new_cols.append("Center_Name")
+                seen_center = True
+            else:
+                new_cols.append("Center_Code")
+        else:
+            new_cols.append(EXAM_HEADER_ALIASES.get(norm, col))
 
-    all_headers = list(df.columns)
-    default_cols = [mapped[k] for k in EXAM_DEFAULT_KEYS if k in mapped]
-    default_cols = [c for c in all_headers if c in default_cols]
+    clean = raw.copy()
+    clean.columns = new_cols
+    for col in EXAM_NUMERIC_COLS:
+        if col in clean.columns:
+            clean[col] = (
+                clean[col].astype(str)
+                .str.replace(",", "", regex=False)
+                .str.replace("%", "", regex=False)
+                .str.strip()
+            )
+            clean[col] = pd.to_numeric(clean[col], errors="coerce").fillna(0)
+    clean = clean.dropna(how="all")
+    return raw, clean, orig_headers
 
-    rows = []
-    for idx in df.index:
-        b, e = float(bud[idx]), float(exp[idx])
-        if center[idx] == "" and b == 0 and e == 0:
+
+CAPEX_RE = re.compile(r"beautification|webcam|furniture|blinds|networking|civil|cctv|paint", re.I)
+HEAD_RULES = [
+    (r"building rent|administration charge", "Building Rent", "Fixed"),
+    (r"housekeeping", "Housekeeping", "Fixed"),
+    (r"security", "Security Guard", "Fixed"),
+    (r"salar|vendor'?s staff", "Vendor Salaries / Staff", "Fixed"),
+    (r"co.?ordinator", "Coordinator Expenses", "Fixed"),
+    (r"electric", "Electricity", "Utilities"),
+    (r"\bdg\b", "DG Running Cost", "Utilities"),
+    (r"water", "Water Bill", "Utilities"),
+    (r"internet", "Internet", "Utilities"),
+    (r"food", "Food (Team & Client)", "Operations"),
+    (r"guest house", "Guest House", "Operations"),
+    (r"admin material", "Admin Material", "Operations"),
+    (r"printer", "Printer Cartridge", "Operations"),
+    (r"amc|repair", "Repair & AMC", "Operations"),
+    (r"misc", "Miscellaneous", "Operations"),
+    (r"one time", "One Time Expense", "One-time / Capex"),
+]
+
+
+def classify_head(raw_head):
+    """Same head is spelled differently across months -> unify + cost type."""
+    h = re.sub(r"\s+", " ", str(raw_head)).strip()
+    hl = h.lower()
+    if CAPEX_RE.search(hl):
+        d = re.sub(r"(?i)^beautification\s*&\s*incidental\s*", "", h).strip().replace("Purhcase", "Purchase")
+        return "Setup: " + (d or h), "One-time / Capex"
+    for pat, name, typ in HEAD_RULES:
+        if re.search(pat, hl):
+            return name, typ
+    return h.title(), "Operations"
+
+
+def split_center(name):
+    s = re.sub(r"^\(|\)$", "", str(name).strip()).strip()
+    s = re.sub(r"^([A-Za-z0-9]+)\s*-\s*", r"\1 - ", s)
+    m = re.match(r"^([A-Z]+\d+)\s*-", s)
+    return s, (m.group(1) if m else s)
+
+
+def fix_state(s, proj):
+    s = str(s).strip()
+    if s.lower() in ("", "nan", "#n/a", "none"):
+        return "Gujarat" if "GUJ" in str(proj).upper() else "Unknown"
+    return {"Gujrat": "Gujarat"}.get(s, s)
+
+
+def month_sort_key(m):
+    for fmt in ("%b_%y", "%B_%y", "%b-%y", "%b_%Y", "%B_%Y"):
+        try:
+            return datetime.strptime(str(m), fmt)
+        except Exception:
             continue
-        if center[idx].lower() in ("center", "centre", "center name", "centre name"):
-            continue  # repeated header row
-        var = b - e
+    return None
+
+
+def _json_safe(v):
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(v, "item"):
+        try:
+            return v.item()
+        except Exception:
+            return str(v)
+    return v
+
+
+def _num(r, col):
+    try:
+        return float(r.get(col, 0) or 0)
+    except Exception:
+        return 0.0
+
+
+def show_exam():
+    try:
+        raw_df, df, orig_headers = load_exam_data()
+    except Exception as e:
+        st.error(f"Could not load the Exam tab from the Google Sheet: {e}")
+        st.stop()
+
+    missing = [c for c in EXAM_REQUIRED if c not in df.columns]
+    if missing:
+        st.error("These required column(s) were not found in the Exam sheet: " + ", ".join(missing) +
+                 ". Please add the correct names in EXAM_HEADER_ALIASES.")
+        st.write("Columns found in the sheet:", list(df.columns))
+        st.stop()
+
+    df = df[df["Budget_Head"].notna()]
+    raw_df = raw_df.loc[df.index]
+    if df.empty:
+        st.error("No data could be loaded (0 rows). Sheet sharing must be 'Anyone with the link - Viewer'.")
+        st.stop()
+
+    center_col = "Center_Name" if "Center_Name" in df.columns else "Center_Code"
+    rows, rev_map = [], {}
+    for i, r in df.iterrows():
+        month = str(r.get("Month", "")).strip()
+        center, short = split_center(r.get(center_col, ""))
+        head, ctype = classify_head(r.get("Budget_Head", ""))
+        bud, exp, appr = _num(r, "Budget"), _num(r, "Expense"), _num(r, "Approved_Expense")
+        extra = _num(r, "Not_Related_Budget")
+        final = _num(r, "Final_Budget") or bud
+        rev = _num(r, "Revenue")
+
+        if rev > 0:  # revenue entered once per center-month -> de-duplicate
+            k = (center, month)
+            rev_map[k] = max(rev_map.get(k, 0), rev)
+
+        if bud == 0 and final == 0 and exp == 0 and appr == 0:
+            continue
+
+        proj = str(r.get("Project_Code", "")).strip()
         rows.append({
-            "state": state[idx], "centerName": center[idx] or "(blank)", "centerCode": ccode[idx],
-            "projectCode": pcode[idx], "budgetHead": bhead[idx] or "(blank)", "month": month[idx],
-            "budget": b, "expense": e, "variance": var, "overBudget": e > b + 0.5,
-            "allColumns": {c: clean_text(df.at[idx, c]) for c in all_headers},
+            "uid": str(r.get("UID", "")).strip(),
+            "centerName": center,
+            "centerShort": short,
+            "projectCode": proj,
+            "month": month,
+            "budgetHead": head,
+            "costType": ctype,
+            "state": fix_state(r.get("State", ""), proj),
+            "budget": bud,
+            "additional": extra,
+            "finalBudget": final,
+            "expense": exp,
+            "approved": appr,
+            "pending": max(0.0, exp - appr),
+            "raw": {h: _json_safe(v) for h, v in raw_df.loc[i].items()},
         })
 
-    # month order: chronological if months can be parsed as dates, else order of appearance
-    months = list(dict.fromkeys(r["month"] for r in rows if r["month"]))
-    parsed = pd.to_datetime(pd.Series(months), errors="coerce", format="mixed") if months else pd.Series([], dtype="datetime64[ns]")
-    if months and parsed.notna().all():
-        months = [m for _, m in sorted(zip(parsed, months))]
-    return rows, {"months": months, "allHeaders": all_headers, "defaultCols": default_cols}
+    if not rows:
+        st.error("No rows left after filtering. Please check the Exam sheet data.")
+        st.stop()
+
+    all_months = sorted({r["month"] for r in rows if r["month"]})
+    parsed = {m: month_sort_key(m) for m in all_months}
+    months = sorted([m for m in all_months if parsed[m]], key=lambda m: parsed[m]) + [m for m in all_months if not parsed[m]]
+    non_monthly = [m for m in all_months if not parsed[m]]
+    monthly_only = [m for m in months if parsed.get(m)]
+    period_label = (f"{monthly_only[0]} – {monthly_only[-1]}" if len(monthly_only) > 1
+                    else (monthly_only[0] if monthly_only else ""))
+
+    state_of = {}
+    for x in rows:
+        state_of.setdefault(x["centerName"], x["state"])
+    rev_rows = [{"centerName": c, "month": m, "revenue": v, "state": state_of.get(c, "")}
+                for (c, m), v in rev_map.items()]
+
+    html = read_template(EXAM_TEMPLATE_FILE)
+    html = html.replace("__ROWS_JSON__", dump(rows))
+    html = html.replace("__REV_JSON__", dump(rev_rows))
+    html = html.replace("__MONTH_ORDER_JSON__", dump(months))
+    html = html.replace("__NON_MONTHLY_JSON__", dump(non_monthly))
+    html = html.replace("__RAW_HEADERS_JSON__", dump(orig_headers))
+    html = html.replace("__PERIOD_LABEL__", period_label)
+
+    components.html(html, height=2800, scrolling=True)
+    st.caption(f"Live data — auto-refreshes every 5 min from Google Sheet (gid={EXAM_GID}).")
 
 
-# ----------------------------------------------------------------------
-# Dashboard switch (top of page)
-# ----------------------------------------------------------------------
+# ======================================================================
+# DASHBOARD SWITCH (top of page)
+# ======================================================================
 choice = st.radio(
     "Dashboard",
     ["APK Project Budget", "Exam Center Budget"],
@@ -1058,70 +1268,7 @@ choice = st.radio(
     label_visibility="collapsed",
 )
 
-
-def dump(obj):
-    return json.dumps(obj, default=str, ensure_ascii=False).replace("</", "<\\/")
-
-
 if choice == "APK Project Budget":
-    try:
-        raw_df = load_sheet(SHEET_ID, SHEET_NAME, GID)
-    except Exception as e:
-        st.error(
-            f"Could not load the '{SHEET_NAME}' tab from the Google Sheet: {e}\n\n"
-            "Check: (1) the tab name is exactly APK, (2) sharing is 'Anyone with the link - Viewer'."
-        )
-        st.stop()
-
-    rows, info = prepare(raw_df)
-    if rows is None:
-        st.error("These required column(s) were not found in the sheet: " + ", ".join(info["missing"]) +
-                 ". Please check the headers and add the correct names in HEADER_ALIASES.")
-        st.write("Columns found in the sheet:", info["found"])
-        st.stop()
-    if not rows:
-        st.error("No data rows found after cleaning. Please check the sheet data and sharing (Anyone with the link - Viewer).")
-        st.stop()
-
-    period_label = f"{len({r['project'] for r in rows})} projects · {len(rows)} line items"
-    html = DASHBOARD_TEMPLATE_HTML
-    html = html.replace("__ROWS_JSON__", dump(rows))
-    html = html.replace("__INFO_JSON__", dump(info))
-    html = html.replace("__PERIOD_LABEL__", period_label)
-    components.html(html, height=2600, scrolling=True)
-    st.caption("Budget = 'Budget' column, Actual = 'Actual Expences' column. Remaining and Util % are recalculated here, so sheet errors like #DIV/0! do not affect the charts.")
-
+    show_apk()
 else:
-    try:
-        exam_raw = load_sheet(EXAM_SHEET_ID, EXAM_SHEET_NAME, EXAM_GID)
-    except Exception as e:
-        st.error(
-            f"Could not load the '{EXAM_SHEET_NAME}' tab: {e}\n\n"
-            "Check EXAM_SHEET_ID / EXAM_SHEET_NAME at the top of the code and that sharing is 'Anyone with the link - Viewer'."
-        )
-        st.stop()
-
-    exam_rows, exam_info = prepare_exam(exam_raw)
-    if exam_rows is None:
-        st.error("Exam Center sheet me ye required column nahi mile: " + ", ".join(exam_info["missing"]) +
-                 ". EXAM_ALIASES me sahi header naam add karo.")
-        st.write("Columns found in the sheet:", exam_info["found"])
-        st.stop()
-    if not exam_rows:
-        st.error("Exam Center sheet me koi data row nahi mili.")
-        st.stop()
-
-    period_label = f"{len({r['centerName'] for r in exam_rows})} centers · {len(exam_rows)} line items"
-    tpl_path = Path(__file__).with_name("exam_dashboard.html")
-    try:
-        html = tpl_path.read_text(encoding="utf-8")
-    except Exception as e:
-        st.error(f"exam_dashboard.html file nahi mili (app.py ke saath same folder me honi chahiye): {e}")
-        st.stop()
-    html = html.replace("__ROWS_JSON__", dump(exam_rows))
-    html = html.replace("__MONTH_ORDER_JSON__", dump(exam_info["months"]))
-    html = html.replace("__ALL_HEADERS_JSON__", dump(exam_info["allHeaders"]))
-    html = html.replace("__DEFAULT_COLUMNS_JSON__", dump(exam_info["defaultCols"]))
-    html = html.replace("__PERIOD_LABEL__", period_label)
-    components.html(html, height=2600, scrolling=True)
-    st.caption("Exam Center: Budget vs Expense by center, month, budget head and state.")
+    show_exam()
