@@ -13,6 +13,7 @@ Optional: if you ever want to read by gid instead, paste it in GID.
 import json
 import re
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import quote
 
 import pandas as pd
@@ -22,6 +23,12 @@ import streamlit.components.v1 as components
 SHEET_ID = "1P8awjtc-dwxCce1WJLDixljqL37yqCxnOe5QZ75_gIw"  # change if the APK tab is in another workbook
 SHEET_NAME = "APK"  # exact name of the tab in the Google Sheet
 GID = ""  # optional. Leave empty to read the tab by SHEET_NAME
+
+# ---- Exam Center dashboard (old dashboard) - data source ----
+# Apne purane Exam Center data wali sheet/tab ki details yahan daalo
+EXAM_SHEET_ID = SHEET_ID          # agar alag workbook hai to uski ID yahan daalo
+EXAM_SHEET_NAME = "Exam Center"   # <-- us tab ka exact naam
+EXAM_GID = ""                     # optional (naam ki jagah gid)
 
 # Friendly project names, keyed by the 2nd part of the project code (add new ones here)
 PROJECT_NAMES = {
@@ -970,38 +977,151 @@ def load_sheet(sheet_id, sheet_name, gid):
 
 
 # ----------------------------------------------------------------------
-# Load data (always from Google Sheet - no upload)
+# Exam Center data preparation
 # ----------------------------------------------------------------------
-try:
-    raw_df = load_sheet(SHEET_ID, SHEET_NAME, GID)
-except Exception as e:
-    st.error(
-        f"Could not load the '{SHEET_NAME}' tab from the Google Sheet: {e}\n\n"
-        "Check: (1) the tab name is exactly APK, (2) sharing is 'Anyone with the link - Viewer'."
-    )
-    st.stop()
+EXAM_ALIASES = {
+    "state": "state",
+    "center": "centerName", "centre": "centerName", "centername": "centerName",
+    "centrename": "centerName", "examcenter": "centerName", "examcentre": "centerName",
+    "examcentername": "centerName",
+    "centercode": "centerCode", "centrecode": "centerCode",
+    "projectcode": "projectCode",
+    "budgethead": "budgetHead",
+    "month": "month",
+    "budget": "budget",
+    "expense": "expense", "expenses": "expense", "expence": "expense", "expences": "expense",
+    "actual": "expense", "actualexpense": "expense", "actualexpenses": "expense",
+    "actualexpence": "expense", "actualexpences": "expense",
+}
+EXAM_REQUIRED = ["centerName", "budget", "expense"]
+EXAM_DEFAULT_KEYS = {"state", "centerName", "centerCode", "projectCode", "budgetHead", "month", "budget", "expense"}
 
-rows, info = prepare(raw_df)
-if rows is None:
-    st.error("These required column(s) were not found in the sheet: " + ", ".join(info["missing"]) +
-             ". Please check the headers and add the correct names in HEADER_ALIASES.")
-    st.write("Columns found in the sheet:", info["found"])
-    st.stop()
-if not rows:
-    st.error("No data rows found after cleaning. Please check the sheet data and sharing (Anyone with the link - Viewer).")
-    st.stop()
 
-period_label = f"{len({r['project'] for r in rows})} projects · {len(rows)} line items"
+def prepare_exam(raw):
+    df = raw.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    mapped = {}
+    for c in df.columns:
+        key = EXAM_ALIASES.get(_norm(c))
+        if key and key not in mapped:
+            mapped[key] = c
+    missing = [k for k in EXAM_REQUIRED if k not in mapped]
+    if missing:
+        return None, {"missing": missing, "found": list(df.columns)}
+
+    df = df.dropna(how="all")
+    bud = to_num(df[mapped["budget"]]).fillna(0)
+    exp = to_num(df[mapped["expense"]]).fillna(0)
+
+    def col(key):
+        if key in mapped:
+            return df[mapped[key]].map(clean_text)
+        return pd.Series([""] * len(df), index=df.index)
+
+    state, center, ccode = col("state"), col("centerName"), col("centerCode")
+    pcode, bhead, month = col("projectCode"), col("budgetHead"), col("month")
+
+    all_headers = list(df.columns)
+    default_cols = [mapped[k] for k in EXAM_DEFAULT_KEYS if k in mapped]
+    default_cols = [c for c in all_headers if c in default_cols]
+
+    rows = []
+    for idx in df.index:
+        b, e = float(bud[idx]), float(exp[idx])
+        if center[idx] == "" and b == 0 and e == 0:
+            continue
+        if center[idx].lower() in ("center", "centre", "center name", "centre name"):
+            continue  # repeated header row
+        var = b - e
+        rows.append({
+            "state": state[idx], "centerName": center[idx] or "(blank)", "centerCode": ccode[idx],
+            "projectCode": pcode[idx], "budgetHead": bhead[idx] or "(blank)", "month": month[idx],
+            "budget": b, "expense": e, "variance": var, "overBudget": e > b + 0.5,
+            "allColumns": {c: clean_text(df.at[idx, c]) for c in all_headers},
+        })
+
+    # month order: chronological if months can be parsed as dates, else order of appearance
+    months = list(dict.fromkeys(r["month"] for r in rows if r["month"]))
+    parsed = pd.to_datetime(pd.Series(months), errors="coerce", format="mixed") if months else pd.Series([], dtype="datetime64[ns]")
+    if months and parsed.notna().all():
+        months = [m for _, m in sorted(zip(parsed, months))]
+    return rows, {"months": months, "allHeaders": all_headers, "defaultCols": default_cols}
+
+
+# ----------------------------------------------------------------------
+# Dashboard switch (top of page)
+# ----------------------------------------------------------------------
+choice = st.radio(
+    "Dashboard",
+    ["APK Project Budget", "Exam Center Budget"],
+    horizontal=True,
+    label_visibility="collapsed",
+)
 
 
 def dump(obj):
     return json.dumps(obj, default=str, ensure_ascii=False).replace("</", "<\\/")
 
 
-html = DASHBOARD_TEMPLATE_HTML
-html = html.replace("__ROWS_JSON__", dump(rows))
-html = html.replace("__INFO_JSON__", dump(info))
-html = html.replace("__PERIOD_LABEL__", period_label)
+if choice == "APK Project Budget":
+    try:
+        raw_df = load_sheet(SHEET_ID, SHEET_NAME, GID)
+    except Exception as e:
+        st.error(
+            f"Could not load the '{SHEET_NAME}' tab from the Google Sheet: {e}\n\n"
+            "Check: (1) the tab name is exactly APK, (2) sharing is 'Anyone with the link - Viewer'."
+        )
+        st.stop()
 
-components.html(html, height=2600, scrolling=True)
-st.caption("Budget = 'Budget' column, Actual = 'Actual Expences' column. Remaining and Util % are recalculated here, so sheet errors like #DIV/0! do not affect the charts.")
+    rows, info = prepare(raw_df)
+    if rows is None:
+        st.error("These required column(s) were not found in the sheet: " + ", ".join(info["missing"]) +
+                 ". Please check the headers and add the correct names in HEADER_ALIASES.")
+        st.write("Columns found in the sheet:", info["found"])
+        st.stop()
+    if not rows:
+        st.error("No data rows found after cleaning. Please check the sheet data and sharing (Anyone with the link - Viewer).")
+        st.stop()
+
+    period_label = f"{len({r['project'] for r in rows})} projects · {len(rows)} line items"
+    html = DASHBOARD_TEMPLATE_HTML
+    html = html.replace("__ROWS_JSON__", dump(rows))
+    html = html.replace("__INFO_JSON__", dump(info))
+    html = html.replace("__PERIOD_LABEL__", period_label)
+    components.html(html, height=2600, scrolling=True)
+    st.caption("Budget = 'Budget' column, Actual = 'Actual Expences' column. Remaining and Util % are recalculated here, so sheet errors like #DIV/0! do not affect the charts.")
+
+else:
+    try:
+        exam_raw = load_sheet(EXAM_SHEET_ID, EXAM_SHEET_NAME, EXAM_GID)
+    except Exception as e:
+        st.error(
+            f"Could not load the '{EXAM_SHEET_NAME}' tab: {e}\n\n"
+            "Check EXAM_SHEET_ID / EXAM_SHEET_NAME at the top of the code and that sharing is 'Anyone with the link - Viewer'."
+        )
+        st.stop()
+
+    exam_rows, exam_info = prepare_exam(exam_raw)
+    if exam_rows is None:
+        st.error("Exam Center sheet me ye required column nahi mile: " + ", ".join(exam_info["missing"]) +
+                 ". EXAM_ALIASES me sahi header naam add karo.")
+        st.write("Columns found in the sheet:", exam_info["found"])
+        st.stop()
+    if not exam_rows:
+        st.error("Exam Center sheet me koi data row nahi mili.")
+        st.stop()
+
+    period_label = f"{len({r['centerName'] for r in exam_rows})} centers · {len(exam_rows)} line items"
+    tpl_path = Path(__file__).with_name("exam_dashboard.html")
+    try:
+        html = tpl_path.read_text(encoding="utf-8")
+    except Exception as e:
+        st.error(f"exam_dashboard.html file nahi mili (app.py ke saath same folder me honi chahiye): {e}")
+        st.stop()
+    html = html.replace("__ROWS_JSON__", dump(exam_rows))
+    html = html.replace("__MONTH_ORDER_JSON__", dump(exam_info["months"]))
+    html = html.replace("__ALL_HEADERS_JSON__", dump(exam_info["allHeaders"]))
+    html = html.replace("__DEFAULT_COLUMNS_JSON__", dump(exam_info["defaultCols"]))
+    html = html.replace("__PERIOD_LABEL__", period_label)
+    components.html(html, height=2600, scrolling=True)
+    st.caption("Exam Center: Budget vs Expense by center, month, budget head and state.")
