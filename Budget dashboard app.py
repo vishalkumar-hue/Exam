@@ -1,25 +1,36 @@
 """
-Exam Center Budget vs Expense Dashboard  (v3)
-Live data source: Google Sheet "Sanjay Jha Report Dashboard" -> "Exam" tab
+Exam Center Budget vs Expense Dashboard  (v4)
+Live data source: Google Sheet "Sanjay Jha Report Dashboard"
+   - Infra  -> "Exam" tab (gid=1873962246)
+   - APK    -> "APK" tab  (fetched by tab name)
 Sheet must be shared as "Anyone with the link - Viewer".
+
+v4 changes:
+  1. Division switch at the top: Infra / APK (same analysis + charts for both)
+  2. Heading shows the selected division
 
 v3 changes:
   1. Clicking a center in the heatmap expands its details (rent, bills, all heads) right below that row, with All / month buttons
   2. "Utilization % by Center" chart now also shows Expense / Budget
-  3. Comparison tab has a new "Center-wise Cost Comparison" chart (Rent, Electricity, Water, Internet, DG ...)
+  3. Comparison tab has a "Center-wise Cost Comparison" chart (Rent, Electricity, Water, Internet, DG ...)
 """
 
 import json
 import re
 from datetime import datetime
+from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
 SHEET_ID = "1P8awjtc-dwxCce1WJLDixljqL37yqCxnOe5QZ75_gIw"
-GID = "1873962246"  # Exam tab
-CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
+BASE = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
+
+SOURCES = {
+    "Infra": f"{BASE}/export?format=csv&gid=1873962246",          # Exam tab
+    "APK":   f"{BASE}/gviz/tq?tqx=out:csv&sheet={quote('APK')}",  # APK tab (by name)
+}
 
 DASHBOARD_TEMPLATE_HTML = r"""
 <!DOCTYPE html>
@@ -147,7 +158,7 @@ DASHBOARD_TEMPLATE_HTML = r"""
 <div class="wrap">
   <div class="topbar">
     <div>
-      <h1>APK<span>&amp;</span>Infra</h1>
+      <h1>APK<span>&amp;</span>Infra · <span>__DIV_TITLE__</span></h1>
       <div class="sub"><span class="live-dot"></span>Exam Center Ops · Budget, Expense, Approvals &amp; Revenue (Live)</div>
     </div>
     <div class="topbar-right">
@@ -1204,6 +1215,7 @@ st.markdown(
         .block-container { padding-top: 0rem !important; padding-bottom: 0rem !important; margin-top: 0rem !important; }
         div[data-testid="stAppViewContainer"] { padding-top: 0rem !important; }
         div[data-testid="stMainBlockContainer"] { padding-top: 0rem !important; }
+        div[data-testid="stRadio"] { padding: 10px 24px 0; }
         iframe { display: block; }
     </style>
     """,
@@ -1248,8 +1260,8 @@ def _normalize(name: str) -> str:
 
 
 @st.cache_data(ttl=300)
-def load_data():
-    raw = pd.read_csv(CSV_URL)
+def load_data(url: str):
+    raw = pd.read_csv(url)
     raw.columns = [str(c).strip() for c in raw.columns]
     orig_headers = list(raw.columns)
 
@@ -1281,28 +1293,6 @@ def load_data():
     clean = clean.dropna(how="all")
     return raw, clean, orig_headers
 
-
-try:
-    raw_df, df, orig_headers = load_data()
-except Exception as e:
-    st.error(f"Could not load data from the Google Sheet: {e}")
-    st.stop()
-
-missing = [c for c in REQUIRED_COLS if c not in df.columns]
-if missing:
-    st.error(
-        "These required column(s) were not found in the sheet: "
-        f"{', '.join(missing)}.\n\nThe actual column headers of the sheet are shown below — "
-        "please check them and add the correct names in HEADER_ALIASES."
-    )
-    st.write("Columns found in the sheet:", list(df.columns))
-    st.stop()
-
-df = df[df["Budget_Head"].notna()]
-raw_df = raw_df.loc[df.index]
-if df.empty:
-    st.error("No data could be loaded (0 rows). Please check the sheet sharing - it must be set to 'Anyone with the link - Viewer'.")
-    st.stop()
 
 # ----------------------------------------------------------------------
 # Cleaning helpers (budget-head names, center names, states)
@@ -1385,62 +1375,95 @@ def num(r, col):
         return 0.0
 
 
-center_col = "Center_Name" if "Center_Name" in df.columns else "Center_Code"
+def build_dataset(raw_df, df):
+    """Turn the cleaned dataframe into the JSON-ready rows used by the dashboard."""
+    center_col = "Center_Name" if "Center_Name" in df.columns else "Center_Code"
+    rows, rev_map = [], {}
+    for i, r in df.iterrows():
+        month = str(r.get("Month", "")).strip()
+        center, short = split_center(r.get(center_col, ""))
+        head, ctype = classify_head(r.get("Budget_Head", ""))
+        bud, exp, appr = num(r, "Budget"), num(r, "Expense"), num(r, "Approved_Expense")
+        extra = num(r, "Not_Related_Budget")
+        final = num(r, "Final_Budget") or bud
+        rev = num(r, "Revenue")
 
-rows, rev_map = [], {}
-for i, r in df.iterrows():
-    month = str(r.get("Month", "")).strip()
-    center, short = split_center(r.get(center_col, ""))
-    head, ctype = classify_head(r.get("Budget_Head", ""))
-    bud, exp, appr = num(r, "Budget"), num(r, "Expense"), num(r, "Approved_Expense")
-    extra = num(r, "Not_Related_Budget")
-    final = num(r, "Final_Budget") or bud
-    rev = num(r, "Revenue")
+        if rev > 0:  # revenue is entered once per center-month -> de-duplicate here
+            k = (center, month)
+            rev_map[k] = max(rev_map.get(k, 0), rev)
 
-    if rev > 0:  # revenue is entered once per center-month -> de-duplicate here
-        k = (center, month)
-        rev_map[k] = max(rev_map.get(k, 0), rev)
+        if bud == 0 and final == 0 and exp == 0 and appr == 0:
+            continue  # empty placeholder lines (e.g. unused Year_26 heads)
 
-    if bud == 0 and final == 0 and exp == 0 and appr == 0:
-        continue  # empty placeholder lines (e.g. unused Year_26 heads)
+        proj = str(r.get("Project_Code", "")).strip()
+        rows.append({
+            "uid": str(r.get("UID", "")).strip(),
+            "centerName": center,
+            "centerShort": short,
+            "projectCode": proj,
+            "month": month,
+            "budgetHead": head,
+            "costType": ctype,
+            "state": fix_state(r.get("State", ""), proj),
+            "budget": bud,
+            "additional": extra,
+            "finalBudget": final,
+            "expense": exp,
+            "approved": appr,
+            "pending": max(0.0, exp - appr),
+            "raw": {h: _json_safe(v) for h, v in raw_df.loc[i].items()},
+        })
 
-    proj = str(r.get("Project_Code", "")).strip()
-    rows.append({
-        "uid": str(r.get("UID", "")).strip(),
-        "centerName": center,
-        "centerShort": short,
-        "projectCode": proj,
-        "month": month,
-        "budgetHead": head,
-        "costType": ctype,
-        "state": fix_state(r.get("State", ""), proj),
-        "budget": bud,
-        "additional": extra,
-        "finalBudget": final,
-        "expense": exp,
-        "approved": appr,
-        "pending": max(0.0, exp - appr),
-        "raw": {h: _json_safe(v) for h, v in raw_df.loc[i].items()},
-    })
+    all_months = sorted({r["month"] for r in rows if r["month"]})
+    parsed = {m: month_sort_key(m) for m in all_months}
+    months = sorted([m for m in all_months if parsed[m]], key=lambda m: parsed[m]) + [m for m in all_months if not parsed[m]]
+    non_monthly = [m for m in all_months if not parsed[m]]
+    monthly_only = [m for m in months if parsed.get(m)]
+    period = f"{monthly_only[0]} – {monthly_only[-1]}" if len(monthly_only) > 1 else (monthly_only[0] if monthly_only else "")
 
-if not rows:
-    st.error("No rows left after filtering. Please check the sheet data.")
-    st.stop()
-
-all_months = sorted({r["month"] for r in rows if r["month"]})
-parsed = {m: month_sort_key(m) for m in all_months}
-months = sorted([m for m in all_months if parsed[m]], key=lambda m: parsed[m]) + [m for m in all_months if not parsed[m]]
-non_monthly = [m for m in all_months if not parsed[m]]
-monthly_only = [m for m in months if parsed.get(m)]
-period_label = f"{monthly_only[0]} – {monthly_only[-1]}" if len(monthly_only) > 1 else (monthly_only[0] if monthly_only else "")
-
-rev_rows = [{"centerName": c, "month": m, "revenue": v, "state": next((x["state"] for x in rows if x["centerName"] == c), "")}
-            for (c, m), v in rev_map.items()]
+    state_of = {}
+    for x in rows:
+        state_of.setdefault(x["centerName"], x["state"])
+    rev_rows = [{"centerName": c, "month": m, "revenue": v, "state": state_of.get(c, "")}
+                for (c, m), v in rev_map.items()]
+    return rows, rev_rows, months, non_monthly, period
 
 
 def dump(obj):
     return json.dumps(obj, default=str, ensure_ascii=False).replace("</", "<\\/")
 
+
+# ----------------------------------------------------------------------
+# Division switch (Infra / APK)
+# ----------------------------------------------------------------------
+view = st.radio("Division", list(SOURCES.keys()), horizontal=True, label_visibility="collapsed")
+
+try:
+    raw_df, df, orig_headers = load_data(SOURCES[view])
+except Exception as e:
+    st.error(f"Could not load '{view}' data from the Google Sheet: {e}")
+    st.stop()
+
+missing = [c for c in REQUIRED_COLS if c not in df.columns]
+if missing:
+    st.error(
+        f"[{view}] These required column(s) were not found in the sheet: {', '.join(missing)}.\n\n"
+        "The actual column headers of the sheet are shown below — "
+        "please check them and add the correct names in HEADER_ALIASES."
+    )
+    st.write("Columns found in the sheet:", list(df.columns))
+    st.stop()
+
+df = df[df["Budget_Head"].notna()]
+raw_df = raw_df.loc[df.index]
+if df.empty:
+    st.error(f"[{view}] No data could be loaded (0 rows). Please check the sheet sharing - it must be set to 'Anyone with the link - Viewer'.")
+    st.stop()
+
+rows, rev_rows, months, non_monthly, period_label = build_dataset(raw_df, df)
+if not rows:
+    st.error(f"[{view}] No rows left after filtering. Please check the sheet data.")
+    st.stop()
 
 html = DASHBOARD_TEMPLATE_HTML
 html = html.replace("__ROWS_JSON__", dump(rows))
@@ -1449,6 +1472,7 @@ html = html.replace("__MONTH_ORDER_JSON__", dump(months))
 html = html.replace("__NON_MONTHLY_JSON__", dump(non_monthly))
 html = html.replace("__RAW_HEADERS_JSON__", dump(orig_headers))
 html = html.replace("__PERIOD_LABEL__", period_label)
+html = html.replace("__DIV_TITLE__", view)
 
 components.html(html, height=2800, scrolling=True)
-st.caption(f"Live data — auto-refreshes every 5 min from Google Sheet (gid={GID}).")
+st.caption(f"Live data ({view}) — auto-refreshes every 5 min from Google Sheet.")
