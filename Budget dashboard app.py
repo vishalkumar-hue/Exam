@@ -3,10 +3,10 @@ Exam Center Budget vs Expense Dashboard  (v3)
 Live data source: Google Sheet "Sanjay Jha Report Dashboard" -> "Exam" tab
 Sheet must be shared as "Anyone with the link - Viewer".
 
-v3 changes (sirf ye 3 cheezein add hui hain, baaki sab same):
-  1. Heatmap me center name pe click -> neeche us center ki poori detail khulti hai
-  2. "Utilization % by Center" chart me ab Expense / Budget bhi dikhta hai
-  3. Centers tab me naya "Center-wise Cost Comparison" chart (Rent, Electricity, Water, Internet, DG ...)
+v3 changes:
+  1. Clicking a center in the heatmap expands its details (rent, bills, all heads) right below that row, with All / month buttons
+  2. "Utilization % by Center" chart now also shows Expense / Budget
+  3. Comparison tab has a new "Center-wise Cost Comparison" chart (Rent, Electricity, Water, Internet, DG ...)
 """
 
 import json
@@ -232,7 +232,7 @@ DASHBOARD_TEMPLATE_HTML = r"""
         <div class="chart-box tall"><canvas id="centerMix"></canvas></div></div>
     </div>
 
-    <div class="card" style="margin-top:16px;"><h3>Center × Month Utilization Heatmap <span class="tag">annual items excluded · center pe click karo → usi row ke neeche rent / bill wagairah khulega</span></h3>
+    <div class="card" style="margin-top:16px;"><h3>Center × Month Utilization Heatmap <span class="tag">annual items excluded · click a center to see its rent, bills and heads below the row</span></h3>
       <div class="scroll-table"><table id="heatTable" class="heat"><thead></thead><tbody></tbody></table></div>
 
     </div>
@@ -351,13 +351,13 @@ DASHBOARD_TEMPLATE_HTML = r"""
             <div class="ms-actions"><button type="button" id="ccHeadsRent">Rent</button><button type="button" id="ccHeadsBills">Bills</button><button type="button" id="ccHeadsBoth">Rent+Bills</button><button type="button" id="ccHeadsAll">All</button><button type="button" id="ccHeadsClear">Clear</button></div>
             <div class="ms-list" id="ccHeadsList"></div></div></div>
         <div class="cmp-field"><label for="ccMetric">Value</label>
-          <select id="ccMetric"><option value="expense">Expense (kitna de rahe hain)</option><option value="budget">Budget</option></select></div>
+          <select id="ccMetric"><option value="expense">Expense (amount paid)</option><option value="budget">Budget</option></select></div>
         <div class="cmp-field"><label for="ccLayout">Chart layout</label>
-          <select id="ccLayout"><option value="stacked">Stacked (total ek bar me)</option><option value="grouped">Side-by-side</option></select></div>
+          <select id="ccLayout"><option value="stacked">Stacked (total in one bar)</option><option value="grouped">Side-by-side</option></select></div>
         <div class="cmp-field"><label for="ccSort">Sort centers by</label>
           <select id="ccSort"><option value="total">Total (high → low)</option><option value="name">Center name</option></select></div>
       </div>
-      <div class="note">Rent = "Building Rent" head · Bills = Electricity, DG Running Cost, Water Bill, Internet. Upar ke Month / State / Center filters yahan bhi lagte hain.</div>
+      <div class="note">Rent = "Building Rent" head · Bills = Electricity, DG Running Cost, Water Bill, Internet. The Month / State / Center filters above also apply here.</div>
       <div class="kpis" id="ccKpiRow"></div>
       <div class="chart-box" id="ccBox"><canvas id="ccChart"></canvas></div>
       <div style="margin-top:14px;">
@@ -671,7 +671,7 @@ function renderMonthly(){
     {label:'Lowest Utilization', value: lo ? lo.key + ' (' + fmtPct(lo.UtilPct) + ')' : '-'},
     {label:'Highest Utilization', value: hi ? hi.key + ' (' + fmtPct(hi.UtilPct) + ')' : '-'},
   ]);
-  $('monthlyNote').textContent = ann.length ? `Annual / non-monthly items (${[...new Set(ann.map(r => r.month))].join(', ')}) monthly view mein shamil nahi hain — Budget ${fmtCr(sum(ann, B))}, Expense ${fmtCr(sum(ann, E))}.` : '';
+  $('monthlyNote').textContent = ann.length ? `Annual / non-monthly items (${[...new Set(ann.map(r => r.month))].join(', ')}) are not included in the monthly view — Budget ${fmtCr(sum(ann, B))}, Expense ${fmtCr(sum(ann, E))}.` : '';
   const labels = a.map(x => x.key);
   const tm = new Map(); m.forEach(r => { const k = r.month + '|' + r.costType; tm.set(k, (tm.get(k) || 0) + E(r)); });
   mk('monthlyStack', {data:{labels, datasets:[
@@ -696,7 +696,7 @@ function renderMonthly(){
 
 // ---------------- CENTERS ----------------
 let centerSearchTerm = '', topNCenterTab = 15;
-let openCenters = new Map();   // heatmap me jin centers pe click kiya hai
+let openCenters = new Map();   // centers expanded in the heatmap (center -> selected month)
 function renderCenters(){
   const rows = getFilteredRows();
   const all = agg(rows, by('centerName')).sort(sortBudget);
@@ -710,7 +710,7 @@ function renderCenters(){
   const top = all.slice(0, n);
   boxH('centerUtil', Math.max(380, top.length * 28 + 60)); boxH('centerMix', Math.max(380, top.length * 28 + 60));
   const u = [...top].sort((a,b) => b.UtilPct - a.UtilPct);
-  // v3: label me ab Util % ke saath Expense / Budget bhi dikhta hai
+  // v3: label shows Util % along with Expense / Budget
   mk('centerUtil', {type:'bar', data:{labels:u.map(x => cut(x.key, 30)), datasets:[{label:'Utilization %', data:u.map(x => x.UtilPct), backgroundColor:u.map(x => utilCol(x.UtilPct)), borderRadius:4}]},
     options:{indexAxis:'y', responsive:true, maintainAspectRatio:false, layout:{padding:{right:200}},
       plugins:{legend:{display:false},
@@ -738,16 +738,16 @@ function renderHeat(rows, all){
       const u = g.e / g.b * 100;
       return `<td class="hc" style="background:${bg(u)}" title="${fmtRs(g.e)} of ${fmtRs(g.b)}">${fmtPct(u)}</td>`;
     }).join('');
-    return `<tr class="hm-row${openCenters.has(c.key) ? ' hm-selected' : ''}" data-center="${esc(c.key)}"><td class="hm-name" title="Click karo - is center ki poori detail neeche khulegi">${esc(c.key)}</td>${cells}<td class="hc" style="background:${bg(c.UtilPct)};font-weight:700">${fmtPct(c.UtilPct)}</td></tr>`
+    return `<tr class="hm-row${openCenters.has(c.key) ? ' hm-selected' : ''}" data-center="${esc(c.key)}"><td class="hm-name" title="Click to see this center's details below">${esc(c.key)}</td>${cells}<td class="hc" style="background:${bg(c.UtilPct)};font-weight:700">${fmtPct(c.UtilPct)}</td></tr>`
       + (openCenters.has(c.key) ? `<tr class="hm-detail" data-center="${esc(c.key)}"><td colspan="${months.length + 2}">${centerDetailHtml(c.key, openCenters.get(c.key))}</td></tr>` : '');
   }).join(''));
 }
 
-// ---- v3: heatmap me center pe click -> usi row ke neeche rent / bill wagairah (All ya koi ek month) ----
+// ---- v3: click a center in the heatmap -> rent / bills / heads shown below that row (All or a single month) ----
 function centerDetailHtml(name, month){
   month = month || 'All';
   const all = getFilteredRows().filter(r => r.centerName === name);
-  if (!all.length) return '<span class="muted">Current filters me is center ka data nahi hai.</span>';
+  if (!all.length) return '<span class="muted">No data for this center under the current filters.</span>';
   const mlist = [...new Set(all.map(r => r.month))].sort((a,b) => ord(a) - ord(b));
   if (month !== 'All' && !mlist.includes(month)) month = 'All';
   const rows = month === 'All' ? all : all.filter(r => r.month === month);
@@ -839,7 +839,7 @@ function renderCostCompare(){
     $('ccKpiRow').innerHTML = '';
     if (charts.ccChart){ charts.ccChart.destroy(); delete charts.ccChart; }
     $('ccTable').querySelector('thead').innerHTML = '';
-    fillBody('ccTable', '<tr><td class="muted">Upar se kam se kam ek budget head select karo.</td></tr>');
+    fillBody('ccTable', '<tr><td class="muted">Select at least one budget head above.</td></tr>');
     setTag('ccTag', 'rent, bills — center vs center');
     return;
   }
@@ -931,7 +931,7 @@ function revData(){
 function renderRevenue(){
   const d = revData();
   const centers = new Set(d.map(x => x.centerName));
-  $('revNote').textContent = `Revenue sirf un center-months ke liye hai jinke liye sheet mein Revenue column bhara hua hai (abhi ${REV.length ? [...new Set(REV.map(x => x.centerName))].join(', ') : 'koi nahi'}). Expense/Margin usi center-month ke total expense se nikala gaya hai.`;
+  $('revNote').textContent = `Revenue is available only for center-months where the Revenue column is filled in the sheet (currently: ${REV.length ? [...new Set(REV.map(x => x.centerName))].join(', ') : 'none'}). Expense and margin are calculated from the total expense of the same center-month.`;
   const tr = sum(d, x => x.revenue), te = sum(d, x => x.expense), net = tr - te;
   kpis('revKpiRow', [
     {label:'Total Revenue', value:fmtCr(tr)}, {label:'Expense (same center-months)', value:fmtCr(te)},
@@ -1285,23 +1285,23 @@ def load_data():
 try:
     raw_df, df, orig_headers = load_data()
 except Exception as e:
-    st.error(f"Google Sheet se data load karne mein dikkat aayi: {e}")
+    st.error(f"Could not load data from the Google Sheet: {e}")
     st.stop()
 
 missing = [c for c in REQUIRED_COLS if c not in df.columns]
 if missing:
     st.error(
-        "Ye zaroori column(s) sheet mein nahi mil rahe: "
-        f"{', '.join(missing)}.\n\nSheet ke actual column headers neeche dikh rahe hain — "
-        "inhe check karke HEADER_ALIASES mein sahi naam add karo."
+        "These required column(s) were not found in the sheet: "
+        f"{', '.join(missing)}.\n\nThe actual column headers of the sheet are shown below — "
+        "please check them and add the correct names in HEADER_ALIASES."
     )
-    st.write("Sheet mein mile columns:", list(df.columns))
+    st.write("Columns found in the sheet:", list(df.columns))
     st.stop()
 
 df = df[df["Budget_Head"].notna()]
 raw_df = raw_df.loc[df.index]
 if df.empty:
-    st.error("Data load nahi ho paya (0 rows). Sheet sharing check karo — 'Anyone with the link - Viewer' hona chahiye.")
+    st.error("No data could be loaded (0 rows). Please check the sheet sharing - it must be set to 'Anyone with the link - Viewer'.")
     st.stop()
 
 # ----------------------------------------------------------------------
@@ -1424,7 +1424,7 @@ for i, r in df.iterrows():
     })
 
 if not rows:
-    st.error("Filter ke baad koi row nahi bachi. Sheet ka data check karo.")
+    st.error("No rows left after filtering. Please check the sheet data.")
     st.stop()
 
 all_months = sorted({r["month"] for r in rows if r["month"]})
