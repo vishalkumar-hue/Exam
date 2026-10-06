@@ -1,7 +1,12 @@
 """
-Exam Center Budget vs Expense Dashboard  (v2 - charts re-designed for the actual data)
+Exam Center Budget vs Expense Dashboard  (v3)
 Live data source: Google Sheet "Sanjay Jha Report Dashboard" -> "Exam" tab
 Sheet must be shared as "Anyone with the link - Viewer".
+
+v3 changes (sirf ye 3 cheezein add hui hain, baaki sab same):
+  1. Heatmap me center name pe click -> neeche us center ki poori detail khulti hai
+  2. "Utilization % by Center" chart me ab Expense / Budget bhi dikhta hai
+  3. Centers tab me naya "Center-wise Cost Comparison" chart (Rent, Electricity, Water, Internet, DG ...)
 """
 
 import json
@@ -116,6 +121,16 @@ DASHBOARD_TEMPLATE_HTML = r"""
   .cmp-controls .cmp-field{display:flex; flex-direction:column;}
   .topn-input{background:var(--panel-2); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:3px 7px; font-size:11.5px; width:58px; text-align:center; font-family:inherit;}
   .topn-input:focus{outline:none; border-color:var(--gold);}
+  /* --- v3: heatmap click -> center detail --- */
+  .hm-row{cursor:pointer;}
+  .hm-row:hover td.hm-name{color:var(--gold);}
+  .hm-name::after{content:' ▸'; color:var(--muted); font-size:10px;}
+  tr.hm-selected td.hm-name{color:var(--gold); font-weight:700; box-shadow:inset 3px 0 0 var(--gold);}
+  tr.hm-selected td.hm-name::after{content:' ▾'; color:var(--gold);}
+  .cd-wrap{margin-top:18px; padding-top:16px; border-top:2px solid var(--gold);}
+  .cd-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:10px; flex-wrap:wrap;}
+  .cd-head h3{margin:0; font-size:15px; color:var(--gold);}
+  .cc-max{color:var(--gold); font-weight:700;}
   @media (max-width:980px){ .grid,.grid.even{grid-template-columns:1fr;} }
 </style>
 </head>
@@ -202,13 +217,65 @@ DASHBOARD_TEMPLATE_HTML = r"""
   <div id="tab-centers" class="tabpage">
     <div class="kpis" id="centersKpiRow"></div>
     <div class="grid even">
-      <div class="card"><h3>Utilization % by Center <span class="tag">Top <input type="text" class="topn-input" id="topNCenterTab" value="15"> by budget · green ≤80%, gold ≤100%, red &gt;100%</span></h3>
+      <div class="card"><h3>Utilization % by Center <span class="tag">Top <input type="text" class="topn-input" id="topNCenterTab" value="15"> by budget · label = Util % · Expense / Budget · green ≤80%, gold ≤100%, red &gt;100%</span></h3>
         <div class="chart-box tall"><canvas id="centerUtil"></canvas></div></div>
       <div class="card"><h3>Cost Mix by Center <span class="tag">expense, stacked by cost type</span></h3>
         <div class="chart-box tall"><canvas id="centerMix"></canvas></div></div>
     </div>
-    <div class="card" style="margin-top:16px;"><h3>Center × Month Utilization Heatmap <span class="tag">annual items excluded</span></h3>
-      <div class="scroll-table"><table id="heatTable" class="heat"><thead></thead><tbody></tbody></table></div></div>
+
+    <!-- v3: CENTER-WISE COST COMPARISON (rent / bills) -->
+    <div class="card" style="margin-top:16px;"><h3>Center-wise Cost Comparison <span class="tag" id="ccTag">rent, bills — center vs center</span></h3>
+      <div class="search-row cmp-controls">
+        <div class="cmp-field multiselect" style="min-width:260px;"><label>Budget heads to compare</label>
+          <button type="button" class="ms-btn" id="ccHeadsBtn">Select heads</button>
+          <div class="ms-panel" id="ccHeadsPanel">
+            <input type="text" class="ms-search" id="ccHeadsSearch" placeholder="Search head...">
+            <div class="ms-actions"><button type="button" id="ccHeadsRent">Rent</button><button type="button" id="ccHeadsBills">Bills</button><button type="button" id="ccHeadsBoth">Rent+Bills</button><button type="button" id="ccHeadsAll">All</button><button type="button" id="ccHeadsClear">Clear</button></div>
+            <div class="ms-list" id="ccHeadsList"></div></div></div>
+        <div class="cmp-field"><label for="ccMetric">Value</label>
+          <select id="ccMetric"><option value="expense">Expense (kitna de rahe hain)</option><option value="budget">Budget</option></select></div>
+        <div class="cmp-field"><label for="ccLayout">Chart layout</label>
+          <select id="ccLayout"><option value="stacked">Stacked (total ek bar me)</option><option value="grouped">Side-by-side</option></select></div>
+        <div class="cmp-field"><label for="ccSort">Sort centers by</label>
+          <select id="ccSort"><option value="total">Total (high → low)</option><option value="name">Center name</option></select></div>
+      </div>
+      <div class="note">Rent = "Building Rent" head · Bills = Electricity, DG Running Cost, Water Bill, Internet. Upar ke Month / State / Center filters yahan bhi lagte hain.</div>
+      <div class="kpis" id="ccKpiRow"></div>
+      <div class="chart-box" id="ccBox"><canvas id="ccChart"></canvas></div>
+      <div style="margin-top:14px;">
+        <div class="scroll-table"><table id="ccTable"><thead></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;"><h3>Center × Month Utilization Heatmap <span class="tag">annual items excluded · center name pe click karo → neeche poori detail khulegi</span></h3>
+      <div class="scroll-table"><table id="heatTable" class="heat"><thead></thead><tbody></tbody></table></div>
+
+      <!-- v3: selected center ki detail -->
+      <div id="centerDetailWrap" class="cd-wrap" style="display:none;">
+        <div class="cd-head">
+          <h3 id="centerDetailTitle"></h3>
+          <button type="button" class="clear-btn" id="centerDetailClose">✕ Close</button>
+        </div>
+        <div class="kpis" id="centerDetailKpi"></div>
+        <div class="grid even">
+          <div class="card"><h3>Month-wise Budget vs Expense <span class="tag">annual items excluded</span></h3>
+            <div class="chart-box"><canvas id="cdMonthly"></canvas></div></div>
+          <div class="card"><h3>Cost Head-wise Budget vs Expense</h3>
+            <div class="chart-box"><canvas id="cdHead"></canvas></div></div>
+        </div>
+        <div class="grid even" style="margin-top:16px;">
+          <div class="card"><h3>Month-wise Table</h3>
+            <div class="scroll-table"><table id="cdMonthTable">
+              <thead><tr><th>Month</th><th class="num">Budget</th><th class="num">Expense</th><th class="num">Variance</th><th class="num">Util %</th><th class="num">Over-Budget Lines</th><th class="num">Pending Approval</th></tr></thead>
+              <tbody></tbody></table></div></div>
+          <div class="card"><h3>Cost Head-wise Table</h3>
+            <div class="scroll-table"><table id="cdHeadTable">
+              <thead><tr><th>Budget Head</th><th>Cost Type</th><th class="num">Budget</th><th class="num">Expense</th><th class="num">Variance</th><th class="num">Util %</th><th class="num">Over-Budget Lines</th><th>Status</th></tr></thead>
+              <tbody></tbody></table></div></div>
+        </div>
+      </div>
+    </div>
+
     <div class="card"><h3>Center Analysis <span class="tag" id="centerAnalysisTableTag"></span></h3>
       <div class="search-row"><input type="text" id="centerSearch" placeholder="Search center..."></div>
       <div class="scroll-table"><table id="centerAnalysisTable">
@@ -392,6 +459,7 @@ function downloadCSV(filename, csv){
 }
 const EXPORTABLE_TABLES = [
   ['centerTable','center-summary'],['monthlyTable','monthly-trend'],['centerAnalysisTable','center-analysis'],['heatTable','center-month-heatmap'],
+  ['ccTable','center-cost-comparison'],['cdMonthTable','center-detail-monthwise'],['cdHeadTable','center-detail-headwise'],
   ['typeTable','cost-type-summary'],['headTable','cost-head-analysis'],['revTable','revenue-margin'],['apprTable','pending-approvals'],
   ['repeatTable','repeat-offenders'],['alertsTable','over-budget-alerts'],['cmpTable','comparison'],['detailTable','all-line-items']
 ];
@@ -439,6 +507,10 @@ const sortBudget = (a,b) => b.Budget - a.Budget;
 const by = f => r => r[f];
 const STATE_OF = {}, HEAD_TYPE = {};
 ROWS.forEach(r => { STATE_OF[r.centerName] = r.state; HEAD_TYPE[r.budgetHead] = r.costType; });
+
+// rent / bill head groups (names come from classify_head in Python)
+const RENT_HEADS = ['Building Rent'];
+const BILL_HEADS = ['Electricity','DG Running Cost','Water Bill','Internet'];
 
 function agg(rows, keyFn){
   const m = new Map();
@@ -639,6 +711,7 @@ function renderMonthly(){
 
 // ---------------- CENTERS ----------------
 let centerSearchTerm = '', topNCenterTab = 15;
+let selectedCenter = null;   // heatmap me click kiya hua center
 function renderCenters(){
   const rows = getFilteredRows();
   const all = agg(rows, by('centerName')).sort(sortBudget);
@@ -652,16 +725,21 @@ function renderCenters(){
   const top = all.slice(0, n);
   boxH('centerUtil', Math.max(380, top.length * 28 + 60)); boxH('centerMix', Math.max(380, top.length * 28 + 60));
   const u = [...top].sort((a,b) => b.UtilPct - a.UtilPct);
+  // v3: label me ab Util % ke saath Expense / Budget bhi dikhta hai
   mk('centerUtil', {type:'bar', data:{labels:u.map(x => cut(x.key, 30)), datasets:[{label:'Utilization %', data:u.map(x => x.UtilPct), backgroundColor:u.map(x => utilCol(x.UtilPct)), borderRadius:4}]},
-    options:{indexAxis:'y', responsive:true, maintainAspectRatio:false, layout:{padding:{right:40}},
-      plugins:{legend:{display:false}, datalabels:dlab({formatter:v => Math.round(v) + '%'}), tooltip:{callbacks:{title:it => u[it[0].dataIndex].key, label:c => 'Utilization: ' + Math.round(c.parsed.x) + '% (' + fmtCr(u[c.dataIndex].Expense) + ' of ' + fmtCr(u[c.dataIndex].Budget) + ')'}}},
+    options:{indexAxis:'y', responsive:true, maintainAspectRatio:false, layout:{padding:{right:200}},
+      plugins:{legend:{display:false},
+        datalabels:dlab({formatter:(v, ctx) => Math.round(v) + '%  ·  ' + fmtCr(u[ctx.dataIndex].Expense) + ' / ' + fmtCr(u[ctx.dataIndex].Budget)}),
+        tooltip:{callbacks:{title:it => u[it[0].dataIndex].key, label:c => 'Utilization: ' + Math.round(c.parsed.x) + '%', afterLabel:c => ['Budget: ' + fmtRs(u[c.dataIndex].Budget), 'Expense: ' + fmtRs(u[c.dataIndex].Expense), 'Variance: ' + fmtRs(u[c.dataIndex].Variance)]}}},
       onClick:(evt, els) => { if (els.length) drillFilter('centerName', u[els[0].index].key); }}});
   const cm = new Map(); rows.forEach(r => { const k = r.centerName + '|' + r.costType; cm.set(k, (cm.get(k) || 0) + E(r)); });
   mk('centerMix', {type:'bar', data:{labels:top.map(x => cut(x.key, 30)), datasets:TYPES.map(t => ({label:t, data:top.map(x => cm.get(x.key + '|' + t) || 0), backgroundColor:TYPE_COL[t], stack:'e'}))},
     options:{indexAxis:'y', responsive:true, maintainAspectRatio:false, scales:{x:{stacked:true}, y:{stacked:true}},
       plugins:{legend:{position:'bottom'}, tooltip:{callbacks:{title:it => top[it[0].dataIndex].key, label:c => c.dataset.label + ': ' + fmtRs(c.parsed.x)}}},
       onClick:(evt, els) => { if (els.length) drillFilter('centerName', top[els[0].index].key); }}});
+  renderCostCompare();
   renderHeat(rows, all);
+  renderCenterDetail();
   renderCenterAnalysis(all);
 }
 function renderHeat(rows, all){
@@ -677,9 +755,150 @@ function renderHeat(rows, all){
       const u = g.e / g.b * 100;
       return `<td class="hc" style="background:${bg(u)}" title="${fmtRs(g.e)} of ${fmtRs(g.b)}">${fmtPct(u)}</td>`;
     }).join('');
-    return `<tr><td>${esc(c.key)}</td>${cells}<td class="hc" style="background:${bg(c.UtilPct)};font-weight:700">${fmtPct(c.UtilPct)}</td></tr>`;
+    return `<tr class="hm-row${selectedCenter === c.key ? ' hm-selected' : ''}" data-center="${esc(c.key)}"><td class="hm-name" title="Click karo - is center ki poori detail neeche khulegi">${esc(c.key)}</td>${cells}<td class="hc" style="background:${bg(c.UtilPct)};font-weight:700">${fmtPct(c.UtilPct)}</td></tr>`;
   }).join(''));
 }
+
+// ---- v3: heatmap center click -> neeche us center ki poori detail ----
+function syncHeatSel(){
+  document.querySelectorAll('#heatTable tr.hm-row').forEach(r => r.classList.toggle('hm-selected', r.dataset.center === selectedCenter));
+}
+function renderCenterDetail(){
+  const wrap = $('centerDetailWrap');
+  ['cdMonthly','cdHead'].forEach(id => { if (charts[id]){ charts[id].destroy(); delete charts[id]; } });
+  if (!selectedCenter){ wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  const rows = getFilteredRows().filter(r => r.centerName === selectedCenter);
+  $('centerDetailTitle').innerHTML = esc(selectedCenter) + ' <span class="tag">' + esc(STATE_OF[selectedCenter] || '') + ' · ' + rows.length + ' line items</span>';
+  if (!rows.length){
+    $('centerDetailKpi').innerHTML = '<div class="note">Current filters ke hisaab se is center ka koi data nahi hai.</div>';
+    fillBody('cdMonthTable', ''); fillBody('cdHeadTable', '');
+    return;
+  }
+  const tb = sum(rows, B), te = sum(rows, E), tp = sum(rows, r => r.pending), over = rows.filter(isOver).length, util = tb > 0 ? te / tb * 100 : 0;
+  const rent = sum(rows.filter(r => RENT_HEADS.includes(r.budgetHead)), E);
+  const bills = sum(rows.filter(r => BILL_HEADS.includes(r.budgetHead)), E);
+  const codes = [...new Set(rows.map(r => r.projectCode).filter(Boolean))].join(', ') || '-';
+  kpis('centerDetailKpi', [
+    {label:'Budget', value:fmtCr(tb)}, {label:'Expense', value:fmtCr(te)},
+    {label:'Variance', value:fmtCr(tb - te), delta: tb >= te ? 'Saving' : 'Over Budget', cls: tb >= te ? 'up' : 'down'},
+    {label:'Utilization %', value:fmtPct(util), delta: util > 100 ? 'over-utilized' : 'on track', cls: util > 100 ? 'down' : 'up'},
+    {label:'Rent (Expense)', value:fmtCr(rent), delta:'Building Rent', cls:'muted'},
+    {label:'Bills (Expense)', value:fmtCr(bills), delta:'Electricity, DG, Water, Internet', cls:'muted'},
+    {label:'Pending Approval', value:fmtCr(tp), cls: tp > 0 ? 'down' : 'up'},
+    {label:'Over-Budget Lines', value:fmtNum(over) + ' / ' + fmtNum(rows.length), cls: over > 0 ? 'down' : 'up'},
+    {label:'Project Code', value:esc(codes)},
+  ]);
+  monthlyCombo('cdMonthly', rows);
+  const heads = agg(rows, by('budgetHead')).sort(sortBudget);
+  boxH('cdHead', Math.max(300, heads.length * 34 + 60));
+  beChart('cdHead', heads, true, null);
+  const months = agg(rows, by('month')).sort(byMonth);
+  fillBody('cdMonthTable', months.map(x => `<tr><td>${esc(x.key)}</td><td class="num">${fmtCr(x.Budget)}</td><td class="num">${fmtCr(x.Expense)}</td><td class="num">${fmtCr(x.Variance)}</td><td class="num">${pill(x.UtilPct)}</td><td class="num">${x.Over}</td><td class="num">${fmtCr(x.Pending)}</td></tr>`).join(''));
+  fillBody('cdHeadTable', heads.map(x => `<tr><td>${esc(x.key)}</td><td>${esc(HEAD_TYPE[x.key] || '')}</td><td class="num">${fmtCr(x.Budget)}</td><td class="num">${fmtCr(x.Expense)}</td><td class="num">${fmtCr(x.Variance)}</td><td class="num">${pill(x.UtilPct)}</td><td class="num">${x.Over}</td><td><span class="pill ${x.Variance < 0 ? 'bad' : 'good'}">${x.Variance < 0 ? 'Over Budget' : 'Within Budget'}</span></td></tr>`).join(''));
+}
+$('heatTable').addEventListener('click', e => {
+  const tr = e.target.closest('tr.hm-row'); if (!tr) return;
+  const name = tr.dataset.center;
+  selectedCenter = (selectedCenter === name) ? null : name;
+  syncHeatSel(); renderCenterDetail();
+  if (selectedCenter) $('centerDetailWrap').scrollIntoView({behavior:'smooth', block:'start'});
+});
+$('centerDetailClose').addEventListener('click', () => { selectedCenter = null; syncHeatSel(); renderCenterDetail(); });
+
+// ---- v3: center-wise cost comparison (rent / bills / any head) ----
+let ccSelected = new Set();
+function updateCcBtn(){
+  const n = ccSelected.size, b = $('ccHeadsBtn');
+  b.textContent = n === 0 ? 'Select heads' : (n === 1 ? [...ccSelected][0] : n + ' heads selected');
+  b.classList.toggle('active', n > 0);
+}
+function buildCcHeadsPanel(){
+  const all = uniqueValues('budgetHead');
+  const def = all.filter(h => RENT_HEADS.includes(h) || BILL_HEADS.includes(h));
+  ccSelected = new Set(def.length ? def : all.slice(0, 3));
+  const l = $('ccHeadsList'); l.innerHTML = '';
+  all.forEach(h => {
+    const row = document.createElement('label'); row.className = 'ms-option';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = h; cb.checked = ccSelected.has(h);
+    const sp = document.createElement('span'); sp.textContent = h; sp.title = h;
+    row.appendChild(cb); row.appendChild(sp); l.appendChild(row);
+  });
+  updateCcBtn();
+}
+const readCc = () => { ccSelected = new Set(Array.from(document.querySelectorAll('#ccHeadsList input:checked')).map(c => c.value)); updateCcBtn(); renderCostCompare(); };
+const setCc = list => { document.querySelectorAll('#ccHeadsList input').forEach(c => { c.checked = list.includes(c.value); }); readCc(); };
+$('ccHeadsBtn').addEventListener('click', e => { e.stopPropagation(); document.querySelectorAll('.ms-panel.open').forEach(p => { if (p.id !== 'ccHeadsPanel') p.classList.remove('open'); }); $('ccHeadsPanel').classList.toggle('open'); });
+$('ccHeadsPanel').addEventListener('click', e => e.stopPropagation());
+$('ccHeadsSearch').addEventListener('input', e => { const t = e.target.value.toLowerCase(); document.querySelectorAll('#ccHeadsList .ms-option').forEach(o => { o.style.display = o.textContent.toLowerCase().includes(t) ? '' : 'none'; }); });
+$('ccHeadsRent').addEventListener('click', () => setCc(RENT_HEADS));
+$('ccHeadsBills').addEventListener('click', () => setCc(BILL_HEADS));
+$('ccHeadsBoth').addEventListener('click', () => setCc([...RENT_HEADS, ...BILL_HEADS]));
+$('ccHeadsAll').addEventListener('click', () => { document.querySelectorAll('#ccHeadsList .ms-option').forEach(o => { if (o.style.display !== 'none') o.querySelector('input').checked = true; }); readCc(); });
+$('ccHeadsClear').addEventListener('click', () => { document.querySelectorAll('#ccHeadsList input').forEach(c => c.checked = false); readCc(); });
+$('ccHeadsList').addEventListener('change', readCc);
+['ccMetric','ccLayout','ccSort'].forEach(id => $(id).addEventListener('change', renderCostCompare));
+
+function renderCostCompare(){
+  const metric = $('ccMetric').value, st = $('ccLayout').value === 'stacked', sortBy = $('ccSort').value;
+  const val = r => metric === 'budget' ? B(r) : E(r);
+  const mLabel = metric === 'budget' ? 'Budget' : 'Expense';
+  const all = getFilteredRows(), cm = new Map(), ht = new Map();
+  all.forEach(r => { if (!cm.has(r.centerName)) cm.set(r.centerName, {}); });
+  all.filter(r => ccSelected.has(r.budgetHead)).forEach(r => {
+    const g = cm.get(r.centerName), v = val(r);
+    g[r.budgetHead] = (g[r.budgetHead] || 0) + v;
+    ht.set(r.budgetHead, (ht.get(r.budgetHead) || 0) + v);
+  });
+  const heads = [...ccSelected].sort((a,b) => (ht.get(b) || 0) - (ht.get(a) || 0));
+  const cs = [...cm.entries()].map(([key, g]) => ({key, g, total: heads.reduce((s, h) => s + (g[h] || 0), 0)}));
+  if (sortBy === 'name') cs.sort((a,b) => a.key.localeCompare(b.key)); else cs.sort((a,b) => b.total - a.total);
+
+  if (!heads.length || !cs.length){
+    $('ccKpiRow').innerHTML = '';
+    if (charts.ccChart){ charts.ccChart.destroy(); delete charts.ccChart; }
+    $('ccTable').querySelector('thead').innerHTML = '';
+    fillBody('ccTable', '<tr><td class="muted">Upar se kam se kam ek budget head select karo.</td></tr>');
+    setTag('ccTag', 'rent, bills — center vs center');
+    return;
+  }
+  const grand = sum(cs, c => c.total);
+  const withVal = cs.filter(c => c.total > 0);
+  const hi = [...cs].sort((a,b) => b.total - a.total)[0];
+  const lo = [...withVal].sort((a,b) => a.total - b.total)[0];
+  kpis('ccKpiRow', [
+    {label:'Total ' + mLabel, value:fmtCr(grand), delta: heads.length + ' head(s) selected', cls:'muted'},
+    {label:'Centers', value:fmtNum(cs.length)},
+    {label:'Avg per Center', value:fmtCr(grand / cs.length)},
+    {label:'Highest', value:cut(hi.key, 26), delta:fmtCr(hi.total), cls:'down'},
+    {label:'Lowest (non-zero)', value: lo ? cut(lo.key, 26) : '-', delta: lo ? fmtCr(lo.total) : '', cls:'up'},
+  ]);
+  setTag('ccTag', mLabel + ' · ' + cs.length + ' centers · ' + heads.length + ' heads · click a bar to drill down');
+
+  const h = st ? cs.length * 30 + 90 : cs.length * (heads.length * 15 + 16) + 90;
+  boxH('ccChart', Math.max(380, h));
+  const thr = Math.max(...cs.map(c => c.total)) * 0.08;
+  mk('ccChart', {type:'bar', data:{
+      labels: cs.map(c => cut(c.key, 30) + '  (' + fmtCr(c.total) + ')'),
+      datasets: heads.map((hd, i) => ({label:hd, data:cs.map(c => c.g[hd] || 0), backgroundColor:PALETTE[i % PALETTE.length], borderRadius:3, ...(st ? {stack:'s'} : {})}))},
+    options:{indexAxis:'y', responsive:true, maintainAspectRatio:false, layout:{padding:{right: st ? 10 : 62}},
+      scales:{x:{stacked:st, title:{display:true, text:'₹ ' + mLabel}}, y:{stacked:st, ticks:{autoSkip:false}}},
+      plugins:{legend:{position:'bottom'},
+        datalabels: st ? dlab({anchor:'center', align:'center', display:c => c.dataset.data[c.dataIndex] > thr, formatter:v => fmtCr(v)})
+                       : dlab({display:c => c.dataset.data[c.dataIndex] > 0, formatter:v => fmtCr(v)}),
+        tooltip:{callbacks:{title:it => cs[it[0].dataIndex].key, label:c => c.dataset.label + ': ' + fmtRs(c.parsed.x), footer:it => st ? 'Total: ' + fmtRs(sum(it, x => x.parsed.x)) : ''}}},
+      onClick:(evt, els) => { if (els.length) drillFilter('centerName', cs[els[0].index].key); }}});
+
+  const mx = {}; heads.forEach(hd => { mx[hd] = Math.max(...cs.map(c => c.g[hd] || 0)); });
+  $('ccTable').querySelector('thead').innerHTML = '<tr><th>Center</th>' + heads.map(hd => `<th class="num">${esc(hd)}</th>`).join('') + '<th class="num">Total</th><th class="num">Share %</th></tr>';
+  fillBody('ccTable',
+    cs.map(c => `<tr><td>${esc(c.key)}</td>` + heads.map(hd => {
+      const v = c.g[hd] || 0;
+      return `<td class="num${v > 0 && v === mx[hd] ? ' cc-max' : ''}">${v > 0 ? fmtCr(v) : '-'}</td>`;
+    }).join('') + `<td class="num"><b>${fmtCr(c.total)}</b></td><td class="num">${grand > 0 ? fmtPct(c.total / grand * 100) : '-'}</td></tr>`).join('')
+    + `<tr style="font-weight:700"><td>Total</td>` + heads.map(hd => `<td class="num">${fmtCr(ht.get(hd) || 0)}</td>`).join('') + `<td class="num">${fmtCr(grand)}</td><td class="num">100%</td></tr>`);
+}
+
 function renderCenterAnalysis(all){
   const term = centerSearchTerm.trim().toLowerCase();
   const f = term ? all.filter(c => c.key.toLowerCase().includes(term) || (STATE_OF[c.key] || '').toLowerCase().includes(term)) : all;
@@ -983,6 +1202,7 @@ try { savedTheme = localStorage.getItem(THEME_STORAGE_KEY) || 'dark'; } catch(e)
 applyTheme(savedTheme, true);
 buildFilterBar();
 buildDetailColsPanel();
+buildCcHeadsPanel();
 addExportButtons();
 $('periodLabel').textContent = '__PERIOD_LABEL__';
 renderOverview();
