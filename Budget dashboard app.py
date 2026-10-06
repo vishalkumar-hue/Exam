@@ -127,9 +127,14 @@ DASHBOARD_TEMPLATE_HTML = r"""
   .hm-name::after{content:' ▸'; color:var(--muted); font-size:10px;}
   tr.hm-selected td.hm-name{color:var(--gold); font-weight:700; box-shadow:inset 3px 0 0 var(--gold);}
   tr.hm-selected td.hm-name::after{content:' ▾'; color:var(--gold);}
-  .cd-wrap{margin-top:18px; padding-top:16px; border-top:2px solid var(--gold);}
-  .cd-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:10px; flex-wrap:wrap;}
-  .cd-head h3{margin:0; font-size:15px; color:var(--gold);}
+  tr.hm-detail td{background:var(--panel-2) !important; padding:12px 14px; white-space:normal; border-bottom:2px solid var(--gold);}
+  .hm-chips{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px;}
+  .hm-chips:last-child{margin-bottom:0;}
+  .hm-chip{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:7px 11px; min-width:118px;}
+  .hm-chip.tot{border-color:var(--teal);} .hm-chip.key{border-color:var(--gold);} .hm-chip.bad{border-color:var(--coral);}
+  .hm-chip-l{font-size:10.5px; color:var(--muted);}
+  .hm-chip-v{font-size:14px; font-weight:700; margin-top:2px;}
+  .hm-chip-s{font-size:10.5px; color:var(--muted); margin-top:1px;}
   .cc-max{color:var(--gold); font-weight:700;}
   @media (max-width:980px){ .grid,.grid.even{grid-template-columns:1fr;} }
 </style>
@@ -247,33 +252,9 @@ DASHBOARD_TEMPLATE_HTML = r"""
       </div>
     </div>
 
-    <div class="card" style="margin-top:16px;"><h3>Center × Month Utilization Heatmap <span class="tag">annual items excluded · center name pe click karo → neeche poori detail khulegi</span></h3>
+    <div class="card" style="margin-top:16px;"><h3>Center × Month Utilization Heatmap <span class="tag">annual items excluded · center pe click karo → usi row ke neeche rent / bill wagairah khulega</span></h3>
       <div class="scroll-table"><table id="heatTable" class="heat"><thead></thead><tbody></tbody></table></div>
 
-      <!-- v3: selected center ki detail -->
-      <div id="centerDetailWrap" class="cd-wrap" style="display:none;">
-        <div class="cd-head">
-          <h3 id="centerDetailTitle"></h3>
-          <button type="button" class="clear-btn" id="centerDetailClose">✕ Close</button>
-        </div>
-        <div class="kpis" id="centerDetailKpi"></div>
-        <div class="grid even">
-          <div class="card"><h3>Month-wise Budget vs Expense <span class="tag">annual items excluded</span></h3>
-            <div class="chart-box"><canvas id="cdMonthly"></canvas></div></div>
-          <div class="card"><h3>Cost Head-wise Budget vs Expense</h3>
-            <div class="chart-box"><canvas id="cdHead"></canvas></div></div>
-        </div>
-        <div class="grid even" style="margin-top:16px;">
-          <div class="card"><h3>Month-wise Table</h3>
-            <div class="scroll-table"><table id="cdMonthTable">
-              <thead><tr><th>Month</th><th class="num">Budget</th><th class="num">Expense</th><th class="num">Variance</th><th class="num">Util %</th><th class="num">Over-Budget Lines</th><th class="num">Pending Approval</th></tr></thead>
-              <tbody></tbody></table></div></div>
-          <div class="card"><h3>Cost Head-wise Table</h3>
-            <div class="scroll-table"><table id="cdHeadTable">
-              <thead><tr><th>Budget Head</th><th>Cost Type</th><th class="num">Budget</th><th class="num">Expense</th><th class="num">Variance</th><th class="num">Util %</th><th class="num">Over-Budget Lines</th><th>Status</th></tr></thead>
-              <tbody></tbody></table></div></div>
-        </div>
-      </div>
     </div>
 
     <div class="card"><h3>Center Analysis <span class="tag" id="centerAnalysisTableTag"></span></h3>
@@ -448,7 +429,7 @@ function tableToCSV(table){
   const lines = [];
   const headRow = table.querySelector('thead tr');
   if (headRow) lines.push(Array.from(headRow.children).map(th => csvEscapeCell(th.textContent.trim())).join(','));
-  table.querySelectorAll('tbody tr').forEach(tr => lines.push(Array.from(tr.children).map(td => csvEscapeCell(td.textContent.trim())).join(',')));
+  table.querySelectorAll('tbody tr:not(.hm-detail)').forEach(tr => lines.push(Array.from(tr.children).map(td => csvEscapeCell(td.textContent.trim())).join(',')));
   return lines.join('\r\n');
 }
 function downloadCSV(filename, csv){
@@ -459,7 +440,7 @@ function downloadCSV(filename, csv){
 }
 const EXPORTABLE_TABLES = [
   ['centerTable','center-summary'],['monthlyTable','monthly-trend'],['centerAnalysisTable','center-analysis'],['heatTable','center-month-heatmap'],
-  ['ccTable','center-cost-comparison'],['cdMonthTable','center-detail-monthwise'],['cdHeadTable','center-detail-headwise'],
+  ['ccTable','center-cost-comparison'],
   ['typeTable','cost-type-summary'],['headTable','cost-head-analysis'],['revTable','revenue-margin'],['apprTable','pending-approvals'],
   ['repeatTable','repeat-offenders'],['alertsTable','over-budget-alerts'],['cmpTable','comparison'],['detailTable','all-line-items']
 ];
@@ -711,7 +692,7 @@ function renderMonthly(){
 
 // ---------------- CENTERS ----------------
 let centerSearchTerm = '', topNCenterTab = 15;
-let selectedCenter = null;   // heatmap me click kiya hua center
+let openCenters = new Set();   // heatmap me jin centers pe click kiya hai
 function renderCenters(){
   const rows = getFilteredRows();
   const all = agg(rows, by('centerName')).sort(sortBudget);
@@ -739,7 +720,6 @@ function renderCenters(){
       onClick:(evt, els) => { if (els.length) drillFilter('centerName', top[els[0].index].key); }}});
   renderCostCompare();
   renderHeat(rows, all);
-  renderCenterDetail();
   renderCenterAnalysis(all);
 }
 function renderHeat(rows, all){
@@ -755,56 +735,40 @@ function renderHeat(rows, all){
       const u = g.e / g.b * 100;
       return `<td class="hc" style="background:${bg(u)}" title="${fmtRs(g.e)} of ${fmtRs(g.b)}">${fmtPct(u)}</td>`;
     }).join('');
-    return `<tr class="hm-row${selectedCenter === c.key ? ' hm-selected' : ''}" data-center="${esc(c.key)}"><td class="hm-name" title="Click karo - is center ki poori detail neeche khulegi">${esc(c.key)}</td>${cells}<td class="hc" style="background:${bg(c.UtilPct)};font-weight:700">${fmtPct(c.UtilPct)}</td></tr>`;
+    return `<tr class="hm-row${openCenters.has(c.key) ? ' hm-selected' : ''}" data-center="${esc(c.key)}"><td class="hm-name" title="Click karo - is center ki poori detail neeche khulegi">${esc(c.key)}</td>${cells}<td class="hc" style="background:${bg(c.UtilPct)};font-weight:700">${fmtPct(c.UtilPct)}</td></tr>`
+      + (openCenters.has(c.key) ? `<tr class="hm-detail"><td colspan="${months.length + 2}">${centerDetailHtml(c.key)}</td></tr>` : '');
   }).join(''));
 }
 
-// ---- v3: heatmap center click -> neeche us center ki poori detail ----
-function syncHeatSel(){
-  document.querySelectorAll('#heatTable tr.hm-row').forEach(r => r.classList.toggle('hm-selected', r.dataset.center === selectedCenter));
-}
-function renderCenterDetail(){
-  const wrap = $('centerDetailWrap');
-  ['cdMonthly','cdHead'].forEach(id => { if (charts[id]){ charts[id].destroy(); delete charts[id]; } });
-  if (!selectedCenter){ wrap.style.display = 'none'; return; }
-  wrap.style.display = 'block';
-  const rows = getFilteredRows().filter(r => r.centerName === selectedCenter);
-  $('centerDetailTitle').innerHTML = esc(selectedCenter) + ' <span class="tag">' + esc(STATE_OF[selectedCenter] || '') + ' · ' + rows.length + ' line items</span>';
-  if (!rows.length){
-    $('centerDetailKpi').innerHTML = '<div class="note">Current filters ke hisaab se is center ka koi data nahi hai.</div>';
-    fillBody('cdMonthTable', ''); fillBody('cdHeadTable', '');
-    return;
-  }
-  const tb = sum(rows, B), te = sum(rows, E), tp = sum(rows, r => r.pending), over = rows.filter(isOver).length, util = tb > 0 ? te / tb * 100 : 0;
-  const rent = sum(rows.filter(r => RENT_HEADS.includes(r.budgetHead)), E);
-  const bills = sum(rows.filter(r => BILL_HEADS.includes(r.budgetHead)), E);
-  const codes = [...new Set(rows.map(r => r.projectCode).filter(Boolean))].join(', ') || '-';
-  kpis('centerDetailKpi', [
-    {label:'Budget', value:fmtCr(tb)}, {label:'Expense', value:fmtCr(te)},
-    {label:'Variance', value:fmtCr(tb - te), delta: tb >= te ? 'Saving' : 'Over Budget', cls: tb >= te ? 'up' : 'down'},
-    {label:'Utilization %', value:fmtPct(util), delta: util > 100 ? 'over-utilized' : 'on track', cls: util > 100 ? 'down' : 'up'},
-    {label:'Rent (Expense)', value:fmtCr(rent), delta:'Building Rent', cls:'muted'},
-    {label:'Bills (Expense)', value:fmtCr(bills), delta:'Electricity, DG, Water, Internet', cls:'muted'},
-    {label:'Pending Approval', value:fmtCr(tp), cls: tp > 0 ? 'down' : 'up'},
-    {label:'Over-Budget Lines', value:fmtNum(over) + ' / ' + fmtNum(rows.length), cls: over > 0 ? 'down' : 'up'},
-    {label:'Project Code', value:esc(codes)},
-  ]);
-  monthlyCombo('cdMonthly', rows);
-  const heads = agg(rows, by('budgetHead')).sort(sortBudget);
-  boxH('cdHead', Math.max(300, heads.length * 34 + 60));
-  beChart('cdHead', heads, true, null);
-  const months = agg(rows, by('month')).sort(byMonth);
-  fillBody('cdMonthTable', months.map(x => `<tr><td>${esc(x.key)}</td><td class="num">${fmtCr(x.Budget)}</td><td class="num">${fmtCr(x.Expense)}</td><td class="num">${fmtCr(x.Variance)}</td><td class="num">${pill(x.UtilPct)}</td><td class="num">${x.Over}</td><td class="num">${fmtCr(x.Pending)}</td></tr>`).join(''));
-  fillBody('cdHeadTable', heads.map(x => `<tr><td>${esc(x.key)}</td><td>${esc(HEAD_TYPE[x.key] || '')}</td><td class="num">${fmtCr(x.Budget)}</td><td class="num">${fmtCr(x.Expense)}</td><td class="num">${fmtCr(x.Variance)}</td><td class="num">${pill(x.UtilPct)}</td><td class="num">${x.Over}</td><td><span class="pill ${x.Variance < 0 ? 'bad' : 'good'}">${x.Variance < 0 ? 'Over Budget' : 'Within Budget'}</span></td></tr>`).join(''));
+// ---- v3: heatmap me center pe click -> usi row ke neeche rent / bill wagairah ----
+function centerDetailHtml(name){
+  const rows = getFilteredRows().filter(r => r.centerName === name);
+  if (!rows.length) return '<span class="muted">Current filters me is center ka data nahi hai.</span>';
+  const heads = agg(rows, by('budgetHead')).sort((a,b) => b.Expense - a.Expense);
+  const part = list => { const x = rows.filter(r => list.includes(r.budgetHead)); return [sum(x, E), sum(x, B)]; };
+  const [rentE, rentB] = part(RENT_HEADS), [billE, billB] = part(BILL_HEADS);
+  const chip = (label, e, b, cls) => `<div class="hm-chip ${cls || ''}"><div class="hm-chip-l">${esc(label)}</div><div class="hm-chip-v">${fmtCr(e)}</div><div class="hm-chip-s">Budget ${fmtCr(b)}</div></div>`;
+  return '<div class="hm-chips">'
+    + chip('Total Expense', sum(rows, E), sum(rows, B), 'tot')
+    + chip('Rent', rentE, rentB, 'key')
+    + chip('Bills (Elec + DG + Water + Internet)', billE, billB, 'key')
+    + '</div><div class="hm-chips">'
+    + heads.map(x => chip(x.key, x.Expense, x.Budget, x.Expense > x.Budget + 0.5 ? 'bad' : '')).join('')
+    + '</div>';
 }
 $('heatTable').addEventListener('click', e => {
   const tr = e.target.closest('tr.hm-row'); if (!tr) return;
-  const name = tr.dataset.center;
-  selectedCenter = (selectedCenter === name) ? null : name;
-  syncHeatSel(); renderCenterDetail();
-  if (selectedCenter) $('centerDetailWrap').scrollIntoView({behavior:'smooth', block:'start'});
+  const name = tr.dataset.center, nxt = tr.nextElementSibling;
+  if (openCenters.has(name)){
+    openCenters.delete(name); tr.classList.remove('hm-selected');
+    if (nxt && nxt.classList.contains('hm-detail')) nxt.remove();
+  } else {
+    openCenters.add(name); tr.classList.add('hm-selected');
+    const d = document.createElement('tr'); d.className = 'hm-detail';
+    const td = document.createElement('td'); td.colSpan = tr.children.length; td.innerHTML = centerDetailHtml(name);
+    d.appendChild(td); tr.after(d);
+  }
 });
-$('centerDetailClose').addEventListener('click', () => { selectedCenter = null; syncHeatSel(); renderCenterDetail(); });
 
 // ---- v3: center-wise cost comparison (rent / bills / any head) ----
 let ccSelected = new Set();
