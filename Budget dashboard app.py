@@ -232,30 +232,6 @@ DASHBOARD_TEMPLATE_HTML = r"""
         <div class="chart-box tall"><canvas id="centerMix"></canvas></div></div>
     </div>
 
-    <!-- v3: CENTER-WISE COST COMPARISON (rent / bills) -->
-    <div class="card" style="margin-top:16px;"><h3>Center-wise Cost Comparison <span class="tag" id="ccTag">rent, bills — center vs center</span></h3>
-      <div class="search-row cmp-controls">
-        <div class="cmp-field multiselect" style="min-width:260px;"><label>Budget heads to compare</label>
-          <button type="button" class="ms-btn" id="ccHeadsBtn">Select heads</button>
-          <div class="ms-panel" id="ccHeadsPanel">
-            <input type="text" class="ms-search" id="ccHeadsSearch" placeholder="Search head...">
-            <div class="ms-actions"><button type="button" id="ccHeadsRent">Rent</button><button type="button" id="ccHeadsBills">Bills</button><button type="button" id="ccHeadsBoth">Rent+Bills</button><button type="button" id="ccHeadsAll">All</button><button type="button" id="ccHeadsClear">Clear</button></div>
-            <div class="ms-list" id="ccHeadsList"></div></div></div>
-        <div class="cmp-field"><label for="ccMetric">Value</label>
-          <select id="ccMetric"><option value="expense">Expense (kitna de rahe hain)</option><option value="budget">Budget</option></select></div>
-        <div class="cmp-field"><label for="ccLayout">Chart layout</label>
-          <select id="ccLayout"><option value="stacked">Stacked (total ek bar me)</option><option value="grouped">Side-by-side</option></select></div>
-        <div class="cmp-field"><label for="ccSort">Sort centers by</label>
-          <select id="ccSort"><option value="total">Total (high → low)</option><option value="name">Center name</option></select></div>
-      </div>
-      <div class="note">Rent = "Building Rent" head · Bills = Electricity, DG Running Cost, Water Bill, Internet. Upar ke Month / State / Center filters yahan bhi lagte hain.</div>
-      <div class="kpis" id="ccKpiRow"></div>
-      <div class="chart-box" id="ccBox"><canvas id="ccChart"></canvas></div>
-      <div style="margin-top:14px;">
-        <div class="scroll-table"><table id="ccTable"><thead></thead><tbody></tbody></table></div>
-      </div>
-    </div>
-
     <div class="card" style="margin-top:16px;"><h3>Center × Month Utilization Heatmap <span class="tag">annual items excluded · center pe click karo → usi row ke neeche rent / bill wagairah khulega</span></h3>
       <div class="scroll-table"><table id="heatTable" class="heat"><thead></thead><tbody></tbody></table></div>
 
@@ -364,6 +340,30 @@ DASHBOARD_TEMPLATE_HTML = r"""
       <div class="scroll-table"><table id="cmpTable">
         <thead><tr><th>Group</th><th class="num">Budget</th><th class="num">Expense</th><th class="num">Expense Δ% vs first</th><th class="num">Variance</th><th class="num">Util %</th></tr></thead>
         <tbody></tbody></table></div></div>
+
+    <!-- v3: CENTER-WISE COST COMPARISON (rent / bills) -->
+    <div class="card" style="margin-top:16px;"><h3>Center-wise Cost Comparison <span class="tag" id="ccTag">rent, bills — center vs center</span></h3>
+      <div class="search-row cmp-controls">
+        <div class="cmp-field multiselect" style="min-width:260px;"><label>Budget heads to compare</label>
+          <button type="button" class="ms-btn" id="ccHeadsBtn">Select heads</button>
+          <div class="ms-panel" id="ccHeadsPanel">
+            <input type="text" class="ms-search" id="ccHeadsSearch" placeholder="Search head...">
+            <div class="ms-actions"><button type="button" id="ccHeadsRent">Rent</button><button type="button" id="ccHeadsBills">Bills</button><button type="button" id="ccHeadsBoth">Rent+Bills</button><button type="button" id="ccHeadsAll">All</button><button type="button" id="ccHeadsClear">Clear</button></div>
+            <div class="ms-list" id="ccHeadsList"></div></div></div>
+        <div class="cmp-field"><label for="ccMetric">Value</label>
+          <select id="ccMetric"><option value="expense">Expense (kitna de rahe hain)</option><option value="budget">Budget</option></select></div>
+        <div class="cmp-field"><label for="ccLayout">Chart layout</label>
+          <select id="ccLayout"><option value="stacked">Stacked (total ek bar me)</option><option value="grouped">Side-by-side</option></select></div>
+        <div class="cmp-field"><label for="ccSort">Sort centers by</label>
+          <select id="ccSort"><option value="total">Total (high → low)</option><option value="name">Center name</option></select></div>
+      </div>
+      <div class="note">Rent = "Building Rent" head · Bills = Electricity, DG Running Cost, Water Bill, Internet. Upar ke Month / State / Center filters yahan bhi lagte hain.</div>
+      <div class="kpis" id="ccKpiRow"></div>
+      <div class="chart-box" id="ccBox"><canvas id="ccChart"></canvas></div>
+      <div style="margin-top:14px;">
+        <div class="scroll-table"><table id="ccTable"><thead></thead><tbody></tbody></table></div>
+      </div>
+    </div>
   </div>
 
   <!-- DETAIL -->
@@ -722,7 +722,6 @@ function renderCenters(){
     options:{indexAxis:'y', responsive:true, maintainAspectRatio:false, scales:{x:{stacked:true}, y:{stacked:true}},
       plugins:{legend:{position:'bottom'}, tooltip:{callbacks:{title:it => top[it[0].dataIndex].key, label:c => c.dataset.label + ': ' + fmtRs(c.parsed.x)}}},
       onClick:(evt, els) => { if (els.length) drillFilter('centerName', top[els[0].index].key); }}});
-  renderCostCompare();
   renderHeat(rows, all);
   renderCenterAnalysis(all);
 }
@@ -1043,7 +1042,7 @@ function populateCmpGroups(){
     const span = document.createElement('span'); span.textContent = v; span.title = v;
     row.appendChild(cb); row.appendChild(span); listEl.appendChild(row);
   });
-  updateCmpBtn(); renderComparison();
+  updateCmpBtn(); renderComparison(); renderCostCompare();
 }
 function updateCmpBtn(){ const n = cmpSelected.size, b = $('cmpGroupsBtn'); b.textContent = n === 0 ? 'Select groups' : (n === 1 ? [...cmpSelected][0] : n + ' groups selected'); b.classList.toggle('active', n > 0); }
 const readCmp = () => { cmpSelected = new Set(Array.from(document.querySelectorAll('#cmpGroupsList input:checked')).map(c => c.value)); updateCmpBtn(); renderComparison(); };
